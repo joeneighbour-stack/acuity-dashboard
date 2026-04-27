@@ -765,7 +765,7 @@ function AnalystMonitor(props){
 function Schedule(props){
   var cov=D.cov;var realloc=D.realloc||{};
   var AC={IAN:"#FF8F14",KG:"#22c583",MAG:"#4A90D9",MOH:"#b07ce8",TIV:"#e74c3c"};
-  var[selMonth,setSelMonth]=useState(2);var[selYear,setSelYear]=useState(2026);
+  var nowD=new Date();var[selMonth,setSelMonth]=useState(nowD.getMonth()+1);var[selYear,setSelYear]=useState(nowD.getFullYear());
   var daysInMonth=new Date(selYear,selMonth,0).getDate();
   var firstDow=new Date(selYear,selMonth-1,1).getDay();
   var dayNames=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -817,6 +817,11 @@ function Schedule(props){
     </div>
     <Hd t="Calendar"/>
     <div style={{background:P.cd,borderRadius:12,padding:16,border:"1px solid "+P.bd,marginBottom:20}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <button onClick={function(){if(selMonth===1){setSelMonth(12);setSelYear(selYear-1);}else{setSelMonth(selMonth-1);}}} style={{padding:"4px 12px",background:"transparent",border:"1px solid "+P.bd,color:P.tx,borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>◀</button>
+        <div style={{fontSize:14,fontWeight:700,color:P.ac}}>{["","January","February","March","April","May","June","July","August","September","October","November","December"][selMonth]+" "+selYear}</div>
+        <button onClick={function(){if(selMonth===12){setSelMonth(1);setSelYear(selYear+1);}else{setSelMonth(selMonth+1);}}} style={{padding:"4px 12px",background:"transparent",border:"1px solid "+P.bd,color:P.tx,borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>▶</button>
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:2}}>
         {dayNames.map(function(dn){return <div key={dn} style={{textAlign:"center",fontSize:10,color:P.td,padding:4,fontWeight:600}}>{dn}</div>;})}
       </div>
