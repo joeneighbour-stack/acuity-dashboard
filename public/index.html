@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acuity Trading Performance Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a1a; color: #f0f0f0; font-family: 'Source Sans 3', 'Soleil', sans-serif; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #1a1a1a; }
+  ::-webkit-scrollbar-thumb { background: #3d3d3d; border-radius: 3px; }
+  .loading { display: flex; align-items: center; justify-content: center; min-height: 100vh; font-size: 14px; color: #999; }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Text:ital@0;1&family=Source+Sans+3:wght@300;400;600;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+</head>
+<body>
+<div id="root"><div class="loading">Loading dashboard...</div></div>
+<script type="text/babel">
+const { useState, useMemo, useEffect } = React;
+const { XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, CartesianGrid, Area, AreaChart, ReferenceLine, ComposedChart } = Recharts;
+
+var D = null;
+
+var USER_ROLE = 'admin';
+var USER_ANALYST_ID = null;
+
+function RootApp() {
+  const [loaded, setLoaded] = useState(false);
+  const [user, setUser] = useState(null);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(function() {
+    // Fetch user info, dashboard data, flags and overrides in parallel
+    Promise.all([
+      fetch('/api/me').then(function(r) { return r.ok ? r.json() : {user:null}; }).catch(function() { return {user:null}; }),
+      fetch('/api/data').then(function(r) {
+        if (!r.ok) throw new Error('Data not ready (status ' + r.status + ')');
+        return r.json();
+      }),
+      fetch('/api/flags').then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; }),
+      fetch('/api/overrides').then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; })
+    ]).then(function(results) {
+      var meData = results[0];
+      var dashData = results[1];
+      var flagsData = results[2];
+      var overridesData = results[3];
+      D = dashData;
+      D._initialFlags = flagsData;
+      D._initialOverrides = overridesData.map(function(o) {
+        return { an: o.an, sym: o.sym, dir: o.dir, d: o.d, entry: o.entry, exit: o.exit_val, rr: o.rr, id: o.id };
+      });
+      if (meData.user) {
+        setUser(meData.user);
+        USER_ROLE = meData.user.role;
+        USER_ANALYST_ID = meData.user.analyst_id;
+      }
+      setLoaded(true);
+    }).catch(function(err) {
+      console.error('Failed to load dashboard:', err);
+      setError(err.message);
+      // Retry after 5 seconds (data might still be syncing from API)
+      setTimeout(function() { window.location.reload(); }, 5000);
+    });
+
+    // Also fetch sync status
+    fetch('/api/sync-status').then(function(r) { return r.json(); }).then(function(s) { setSyncStatus(s); }).catch(function(){});
+  }, []);
+
+  if (error) return React.createElement('div', {className: 'loading'}, 
+    React.createElement('div', {style:{textAlign:'center'}},
+      React.createElement('div', {style:{fontSize:16,marginBottom:8}}, 'Loading dashboard data...'),
+      React.createElement('div', {style:{fontSize:12,color:'#666'}}, 'Syncing from trade API. This may take a moment on first load.'),
+      React.createElement('div', {style:{fontSize:10,color:'#555',marginTop:8}}, error)
+    )
+  );
+  if (!loaded) return React.createElement('div', {className: 'loading'},
+    React.createElement('div', {style:{textAlign:'center'}},
+      React.createElement('div', {style:{fontSize:16,marginBottom:8}}, 'Loading dashboard...'),
+      syncStatus ? React.createElement('div', {style:{fontSize:10,color:'#666'}}, 
+        'Last sync: ' + (syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString() : 'never')
+      ) : null
+    )
+  );
+  return React.createElement(App, { user: user });
+}
+
+
+const P={bg:"#1a1a1a",cd:"#262626",bd:"#3d3d3d",tx:"#f0f0f0",tm:"#999999",td:"#666666",ac:"#FF8F14",gn:"#22c583",rd:"#e74c3c",am:"#FFB347",cy:"#2cb5a0",pu:"#b07ce8"};
+const fm=function(n,d){return n!=null?n.toLocaleString("en-GB",{minimumFractionDigits:d||1,maximumFractionDigits:d||1}):"-";};
+const fp=function(n,d){return fm(n,d||1)+"%";};
+const fi=function(n){return n!=null?n.toLocaleString("en-GB"):"-";};
+const TT={contentStyle:{background:"#2a2a2a",border:"1px solid #3d3d3d",borderRadius:6,fontSize:11,color:"#f0f0f0"},labelStyle:{color:"#f0f0f0"},itemStyle:{color:"#f0f0f0"}};
+function Bx(props){return(<div style={{padding:"10px 12px",background:P.cd,borderRadius:8,border:"1px solid "+P.bd}}><div style={{fontSize:10,color:P.td,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>{props.l}</div><div style={{fontSize:18,fontWeight:700,color:props.c||P.tx}}>{props.v}</div>{props.s?<div style={{fontSize:9,color:P.td,marginTop:1}}>{props.s}</div>:null}</div>);}
+function Dot(props){var c={green:P.gn,red:P.rd,amber:P.am,grey:P.td};return(<div style={{width:11,height:11,borderRadius:"50%",background:c[props.c]||P.td,display:"inline-block"}}/>);}
+function Hd(props){return <h2 style={{fontSize:15,fontWeight:400,color:P.tx,margin:"0 0 10px",borderBottom:"1px solid "+P.bd,paddingBottom:7,fontFamily:"'DM Serif Text',serif"}}>{props.t}</h2>;}
+function Btn(props){return <button onClick={props.on} style={{padding:"5px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:props.active?600:400,fontFamily:"inherit",background:props.active?(props.col||P.ac):"transparent",color:props.active?"#fff":P.tm}}>{props.children}</button>;}
+function Bk(props){return <button onClick={props.on} style={{padding:"6px 14px",background:P.cd,color:P.ac,border:"1px solid "+P.bd,borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",marginBottom:14,fontWeight:600}}>{props.label||"Back"}</button>;}
+function Badge(props){var bg=props.st==="live"?"#22c58330":"#efa62030";var cl=props.st==="live"?P.gn:P.am;var tx=props.st==="live"?"LIVE":"PENDING";if(props.over){bg="#22c58330";cl=P.gn;tx="LIVE*";}return <span style={{padding:"1px 6px",borderRadius:3,fontSize:9,fontWeight:700,background:bg,color:cl,letterSpacing:".03em"}}>{tx}</span>;}
+function TLKey(){return(<div style={{display:"flex",gap:12,marginBottom:14,padding:"8px 12px",background:P.cd,borderRadius:8,border:"1px solid "+P.bd,fontSize:10}}>
+  <span style={{display:"flex",alignItems:"center",gap:4}}><Dot c="green"/> Hit Targets</span>
+  <span style={{display:"flex",alignItems:"center",gap:4}}><Dot c="amber"/> Slight Miss</span>
+  <span style={{display:"flex",alignItems:"center",gap:4}}><Dot c="red"/> Missed Targets</span>
+  <span style={{display:"flex",alignItems:"center",gap:4}}><Dot c="grey"/> Too Few Trades</span>
+</div>);}
+function useSort(def,dir){var st=useState({k:def||null,d:dir||"desc"});var sort=st[0];var setSort=st[1];function tog(k){setSort(function(p){return p.k===k?{k:k,d:p.d==="asc"?"desc":"asc"}:{k:k,d:"desc"};});}function fn(arr){if(!sort.k)return arr;return arr.slice().sort(function(a,b){var va=a[sort.k],vb=b[sort.k];if(va==null)va=-Infinity;if(vb==null)vb=-Infinity;if(typeof va==="string"&&typeof vb==="string")return sort.d==="asc"?va.localeCompare(vb):vb.localeCompare(va);return sort.d==="asc"?(va-vb):(vb-va);});}return{sort:sort,tog:tog,fn:fn};}
+function Th(props){var active=props.sk&&props.sk.k===props.k;var arrow=active?(props.sk.d==="asc"?" \u25B2":" \u25BC"):"";return <th onClick={function(){if(props.tog)props.tog(props.k);}} style={{padding:"6px 6px",textAlign:props.a||"left",color:active?P.ac:P.td,fontSize:10,cursor:props.tog?"pointer":"default",userSelect:"none",whiteSpace:"nowrap"}}>{props.children}{arrow}</th>;}
+function Sym(props){return <span onClick={function(){if(props.onAsset)props.onAsset(props.s);}} style={{cursor:props.onAsset?"pointer":"default",textDecoration:props.onAsset?"underline":"none",textDecorationColor:P.ac+"60",fontWeight:600,color:props.c||P.tx}}>{props.s}</span>;}
+var isAdmin=USER_ROLE==="admin";
+  var TABS=isAdmin?["Overview","Analysts","KPIs","Monitor","Schedule"]:["Overview","My Stats","My KPI","My Monitor","Schedule"];
+var SYM_MAP={"UK100":"FTSE","CHN50":"China A50","NIK225":"NIKKEI","FRA40":"CAC","US30":"DOW","US100":"NASDAQ","GER40":"DAX","US500":"SP500","NatGas":"Natural Gas","WTI":"Oil","WTI ":"Oil","XCUUSD":"Copper","XRP":"Ripple","Tesla":"Tesla","Alphabet":"Alphabet","Amazon":"Amazon","Starbucks":"Starbucks","Alibaba":"Alibaba","Bank of America Corp":"Bank of America Corp","Peloton":"Peloton","Uber Technologies":"Uber Technologies","Wayfair Inc":"Wayfair Inc","Snap":"Snap","Comerica Incorporated":"Comerica Incorporated","TSLA":"Tesla","GOOGL":"Alphabet","AMZN":"Amazon","SBUX":"Starbucks","BABA":"Alibaba","BAC":"Bank of America Corp","PTON":"Peloton","UBER":"Uber Technologies","W":"Wayfair Inc","SNAP":"Snap","CMA":"Comerica Incorporated","NFLX":"Netflix","Brent Oil":"Brent"};
+var AUTH_MAP={"Ian":"IAN","ian":"IAN","tiv":"TIV"};
+function normSym(s){return SYM_MAP[s]||SYM_MAP[(s||"").trim()]||(s||"").trim();}
+function normAuth(a){return AUTH_MAP[a]||a;}
+
+var ACTIVE=["IAN","KG","MAG","MOH","TIV"];
+function isActive(id){return ACTIVE.indexOf(id)>=0;}
+var CC={FX:P.ac,Indices:"#8B5CF6",Commodities:"#D4A017",Crypto:P.cy,Stocks:P.gn,Cryptocurrencies:P.cy};
+
+function App(props){
+  var s=useState;
+  var[tab,setTab]=s(0);var[selA,setSelA]=s(USER_ANALYST_ID||null);var[selMonth,setSelMonth]=s(null);var[selYr,setSelYr]=s(null);
+  var[monA,setMonA]=s(USER_ANALYST_ID||null);var[monDay,setMonDay]=s(null);var[flags,setFlags]=s(D._initialFlags||[]);var[overrides,setOverrides]=s(D._initialOverrides||[]);
+  var[holidays,setHolidays]=s([]);var[assetView,setAssetView]=s(null);var[syncing,setSyncing]=s(false);
+  var[flagModal,setFlagModal]=s(null);var[overModal,setOverModal]=s(null);
+  function applyOverrides(trades,ov,dayCtx){
+    if(!ov||ov.length===0)return trades;
+    return trades.map(function(t){
+      var match=ov.find(function(o){
+        if(o.sym!==t.sym||o.dir!==t.dir)return false;
+        if(o.an!==t.an)return false;
+        if(dayCtx&&o.d){var dayNum=o.d.replace(/[^0-9]/g,"");if(String(dayCtx)!==dayNum)return false;}
+        if(!dayCtx&&t.d&&o.d){var oday=o.d.replace(/[^0-9]/g,"");var tday=t.d.replace(/\//g,"").slice(0,2).replace(/^0/,"");if(oday!==tday)return false;}
+        return true;
+      });
+      if(match){var pts2=match.dir==="SELL"?match.entry-match.exit:match.exit-match.entry;return Object.assign({},t,{st:"live",e:match.entry,ex:match.exit,pts:Math.round(pts2*100)/100,rr:match.rr,overridden:true});}
+      return t;
+    });
+  }
+  var patchedData=useMemo(function(){
+    var baseDd=D.dd;var baseDp=D.dp;var baseAd=D.ad;var baseAeq=D.aeq;var baseMpnl=D.mpnl;var baseAtgr=D.atgr;var baseRec=null;var baseMd=null;
+    if(!overrides||overrides.length===0)return{dp:baseDp,ad:baseAd,aeq:baseAeq,mpnl:baseMpnl,atgr:baseAtgr,dd:baseDd,rec:baseRec,md:baseMd};
+    var newDd={};var ddKeys=Object.keys(baseDd);
+    ddKeys.forEach(function(dk){
+      var orig=baseDd[dk];
+      var patched=applyOverrides(orig.t,overrides,dk);
+      newDd[dk]={t:patched,ba:orig.ba,tgr:orig.tgr,nl:orig.nl,np:orig.np};
+    });
+    var newDp=baseDp.map(function(day){
+      var dk=String(day.d);var dd2=newDd[dk];
+      if(!dd2)return day;
+      var live2=dd2.t.filter(function(t){return t.st==="live";});
+      var n2=live2.length;var w2=live2.filter(function(t){return t.rr>0;}).length;
+      var rr2=0;live2.forEach(function(t){rr2+=t.rr;});
+      var total=dd2.t.length;var tgr2=total>0?Math.round(n2/total*1000)/10:0;
+      return{d:day.d,n:n2,w:w2,rr:Math.round(rr2*100)/100,tgr:tgr2,nl:n2,np:total-n2};
+    });
+    var newAd={};var newAeq={};
+    ACTIVE.forEach(function(a){
+      var dayArr=[];var cap=1000;var eqArr=[{d:0,eq:1000}];
+      newDp.forEach(function(day){
+        var dk=String(day.d);var dd2=newDd[dk];if(!dd2)return;
+        var at=dd2.t.filter(function(t){return t.an===a&&t.st==="live";});
+        if(at.length===0)return;
+        var n3=at.length;var w3=at.filter(function(t){return t.rr>0;}).length;
+        var rr3=0;at.forEach(function(t){rr3+=t.rr;});
+        cap=cap*(1+rr3*0.01);
+        dayArr.push({d:day.d,n:n3,w:w3,rr:Math.round(rr3*100)/100});
+        eqArr.push({d:day.d,eq:Math.round(cap)});
+      });
+      newAd[a]=dayArr;newAeq[a]=eqArr;
+    });
+    var newAtgr={};
+    ACTIVE.forEach(function(a){
+      var totalS=0;var totalT=0;
+      ddKeys.forEach(function(dk){
+        var dd2=newDd[dk];if(!dd2)return;
+        var at=dd2.t.filter(function(t){return t.an===a;});
+        totalS+=at.length;totalT+=at.filter(function(t){return t.st==="live";}).length;
+      });
+      newAtgr[a]=totalS>0?Math.round(totalT/totalS*1000)/10:0;
+    });
+    var newMpnl=baseMpnl.slice();
+    return{dp:newDp,ad:newAd,aeq:newAeq,mpnl:newMpnl,atgr:newAtgr,dd:newDd,rec:baseRec,md:baseMd};
+  },[overrides]);
+  function reset(){setSelA(null);setSelMonth(null);setSelYr(null);setMonA(null);setMonDay(null);setAssetView(null);}
+  if(assetView) return <div style={{fontFamily:"'Source Sans 3','Soleil',sans-serif",background:P.bg,color:P.tx,minHeight:"100vh",padding:"16px 20px"}}><AssetView sym={assetView} back={function(){setAssetView(null);}}/></div>;
+  return(
+    <div style={{fontFamily:"'Source Sans 3','Soleil',sans-serif",background:P.bg,color:P.tx,minHeight:"100vh",padding:"16px 20px"}}>
+      <header style={{marginBottom:18,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <div><h1 style={{margin:0,fontSize:20,fontWeight:400,fontFamily:"'DM Serif Text',serif"}}><span style={{color:P.ac}}>{"◆"}</span> Trading Performance</h1><div style={{fontSize:10,color:P.td,marginTop:2}}>{fi(D.o.trades)} trades · Jan 2017 to {D.mpnl[D.mpnl.length-1].mu}</div></div>
+        <div style={{marginLeft:"auto",display:"flex",gap:3,background:P.cd,borderRadius:8,padding:3,border:"1px solid "+P.bd,flexWrap:"wrap"}}>
+          {TABS.map(function(t,i){return <Btn key={t} on={function(){setTab(i);reset();}} active={tab===i}>{t}</Btn>;})}
+          <div style={{marginLeft:8,borderLeft:"1px solid "+P.bd,paddingLeft:8,display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:10,color:P.tm}}>{props.user?props.user.display_name:""}</span>{isAdmin?<button onClick={function(){if(syncing)return;setSyncing(true);fetch("/api/sync",{method:"POST"}).then(function(r){return r.json();}).then(function(res){setSyncing(false);if(res.success){alert("Synced: "+res.trades+" trades, latest: "+res.lastMonth);window.location.reload();}else{alert("Sync failed: "+(res.error||"Unknown"));}}).catch(function(e){setSyncing(false);alert("Sync error: "+e.message);});}} style={{padding:"4px 10px",background:syncing?"#333":"#FF8F14",border:"none",color:syncing?"#999":"#1a1a1a",borderRadius:6,cursor:syncing?"wait":"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600}}>{syncing?"Syncing...":"Sync Data"}</button>:null}<button onClick={function(){fetch("/api/logout",{method:"POST"}).then(function(){window.location.href="/login";});}} style={{padding:"4px 10px",background:"transparent",border:"1px solid "+P.bd,color:P.td,borderRadius:6,cursor:"pointer",fontSize:10,fontFamily:"inherit"}}>Sign Out</button></div>
+        </div>
+      </header>
+      {tab===0?(selMonth?<MonthDrill m={selMonth} back={function(){setSelMonth(null);}} onAsset={setAssetView} patchedData={patchedData}/>:<Overview onMonth={setSelMonth} onAsset={setAssetView} patchedData={patchedData}/>):null}
+      {tab===1?(selA?(selYr?<AnalystYearDrill id={selA} yr={selYr} back={function(){setSelYr(null);}} onAsset={setAssetView}/>:<AnalystDrill id={selA} back={function(){setSelA(null);}} onYr={setSelYr} patchedData={patchedData}/>):null):null}
+      {tab===1&&!selA?<AnalystList sel={setSelA} patchedData={patchedData}/>:null}
+      {tab===2?<KPIDash patchedData={patchedData}/>:null}
+      {tab===3?<Monitor flags={flags} setFlags={setFlags} overrides={overrides} setOverrides={setOverrides} applyOverrides={applyOverrides} patchedData={patchedData} monA={monA} setMonA={setMonA} monDay={monDay} setMonDay={setMonDay} onAsset={setAssetView} setFlagModal={setFlagModal} setOverModal={setOverModal}/>:null}
+      {tab===4?<Schedule holidays={holidays} setHolidays={setHolidays}/>:null}
+      
+      {flagModal?<FlagModal data={flagModal} onSubmit={function(reason){fetch("/api/flags",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trade_id:flagModal.id||null,sym:flagModal.sym,an:flagModal.an,dir:flagModal.dir,d:flagModal.d||null,reason:reason})}).then(function(){return fetch("/api/flags");}).then(function(r){return r.json();}).then(function(fl){setFlags(fl);}).catch(function(){setFlags(function(p){return p.concat([Object.assign({},flagModal,{reason:reason})]);});});setFlagModal(null);}} onClose={function(){setFlagModal(null);}}/>:null}
+      {overModal?<OverrideModal data={overModal} onSubmit={function(vals){fetch("/api/overrides",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trade_id:overModal.id||null,sym:overModal.sym,an:overModal.an,dir:overModal.dir,d:overModal.d||null,entry:vals.entry,exit_val:vals.exit,rr:vals.rr})}).then(function(){return Promise.all([fetch("/api/overrides").then(function(r){return r.json();}),fetch("/api/flags").then(function(r){return r.json();})]);}).then(function(results){setOverrides(results[0].map(function(o){return{an:o.an,sym:o.sym,dir:o.dir,d:o.d,entry:o.entry,exit:o.exit_val,rr:o.rr,id:o.id};}));setFlags(results[1]);}).catch(function(){setOverrides(function(p){var filtered=p.filter(function(o){return !(o.sym===overModal.sym&&o.an===overModal.an&&o.dir===overModal.dir&&o.d===overModal.d);});return filtered.concat([{an:overModal.an,sym:overModal.sym,dir:overModal.dir,d:overModal.d,entry:vals.entry,exit:vals.exit,rr:vals.rr}]);});});setOverModal(null);}} onClose={function(){setOverModal(null);}}/>:null}
+    </div>);
+}
+
+function Overview(props){
+  var o=D.o;var pnl=props.patchedData?props.patchedData.mpnl:D.mpnl;var pnlGrid=pnl.slice(-24);
+  var[chartYr,setChartYr]=useState("all");var[eqMode,setEqMode]=useState("both");
+  var chartData=chartYr==="all"?pnl:pnl.filter(function(p){return p.y===chartYr;});
+  var years=D.yr||[];var sr=typeof D.sr==="object"&&!Array.isArray(D.sr)?(D.sr[chartYr]||D.sr["all"]||[]):D.sr||[];
+  var sOv=useSort(null,"asc");var sdOv=chartYr!=="all"?chartData:[];
+  return(<div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8,marginBottom:20}}>
+      <Bx l="Trades" v={fi(o.trades)}/><Bx l="Win Rate" v={fp(o.winRate)} c={P.gn}/><Bx l="Sum RR" v={fm(o.sumRR)} c={P.cy}/><Bx l="Fixed R" v={fp(o.fixedReturn)} c={P.gn}/><Bx l="Sized R" v={fp(o.sizedReturn)} c={P.gn}/>
+    </div>
+    <Hd t="Monthly P&L (click to drill down)"/>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(90px,1fr))",gap:6,marginBottom:20}}>
+      {pnlGrid.map(function(p){return(<div key={p.m} onClick={function(){props.onMonth(p.m);}} style={{padding:"8px 6px",borderRadius:8,background:P.cd,border:"1px solid "+P.bd,cursor:"pointer",textAlign:"center"}} onMouseEnter={function(e){e.currentTarget.style.borderColor=P.ac;}} onMouseLeave={function(e){e.currentTarget.style.borderColor=P.bd;}}>
+        <div style={{fontSize:9,color:P.td,marginBottom:3}}>{p.mu}</div>
+        <div style={{fontSize:14,fontWeight:700,color:p.ret>0?P.gn:P.rd}}>{p.ret>0?"+":""}{fm(p.ret,2)}%</div>
+        <div style={{fontSize:8,color:P.td,marginTop:2}}>{p.n}t | DD {fm(p.dd,1)}%</div>
+      </div>);})}
+    </div>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+      <Hd t="Equity Curve"/>
+      <div style={{display:"flex",gap:3,marginLeft:"auto",marginBottom:10}}>
+        <Btn on={function(){setEqMode("both");}} active={eqMode==="both"}>Both</Btn>
+        <Btn on={function(){setEqMode("fixed");}} active={eqMode==="fixed"}>Fixed R</Btn>
+        <Btn on={function(){setEqMode("sized");}} active={eqMode==="sized"}>Sized R</Btn>
+      </div>
+    </div>
+    <div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:280,marginBottom:20}}>
+      <ResponsiveContainer><AreaChart data={D.eq}><defs><linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.cy} stopOpacity={0.2}/><stop offset="95%" stopColor={P.cy} stopOpacity={0}/></linearGradient><linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.pu} stopOpacity={0.15}/><stop offset="95%" stopColor={P.pu} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="d" tick={{fontSize:8,fill:P.td}} axisLine={false} tickLine={false} interval={3} label={{value:"Date",position:"insideBottom",offset:-2,fontSize:9,fill:P.td}}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} scale="log" domain={["auto","auto"]} label={{value:eqMode==="sized"?"Sized Return":"Fixed Return",angle:-90,position:"insideLeft",fontSize:9,fill:P.td}}/><Tooltip {...TT}/>
+        {eqMode!=="sized"?<Area type="monotone" dataKey="f" name="Fixed R" stroke={P.cy} fill="url(#gF)" strokeWidth={2} dot={false}/>:null}
+        {eqMode!=="fixed"?<Area type="monotone" dataKey="s" name="Sized R" stroke={P.pu} fill="url(#gS)" strokeWidth={eqMode==="both"?1.5:2} dot={false}/>:null}
+      </AreaChart></ResponsiveContainer>
+    </div>
+    <Hd t="Performance Breakdown"/>
+    <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
+      <Btn on={function(){setChartYr("all");}} active={chartYr==="all"}>All Time</Btn>
+      {years.map(function(y){return <Btn key={y.y} on={function(){setChartYr(y.y);}} active={chartYr===y.y}>{y.y}</Btn>;})}
+    </div>
+    <div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:200,marginBottom:16}}>
+      <ResponsiveContainer><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="mu" tick={{fontSize:7,fill:P.td}} axisLine={false} tickLine={false} interval={chartYr==="all"?8:0}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="rr" name="Sum RR" radius={[3,3,0,0]}>{chartData.map(function(e,i){return <Cell key={i} fill={e.rr>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer>
+    </div>
+    {chartYr!=="all"?<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+      <Th k="mu" sk={sOv.sort} tog={sOv.tog}>MONTH</Th><Th k="n" sk={sOv.sort} tog={sOv.tog} a="right">TRADES</Th><Th k="wr" sk={sOv.sort} tog={sOv.tog} a="right">WIN%</Th><Th k="ret" sk={sOv.sort} tog={sOv.tog} a="right">RETURN</Th><Th k="dd" sk={sOv.sort} tog={sOv.tog} a="right">DD</Th><Th k="rr" sk={sOv.sort} tog={sOv.tog} a="right">RR</Th>
+    </tr></thead><tbody>{(sOv.sort.k?sOv.fn(chartData):chartData).map(function(p){return(<tr key={p.m} style={{borderBottom:"1px solid #3d3d3d15"}}>
+      <td style={{padding:"5px 8px",color:P.ac,fontWeight:600}}>{p.mu}</td><td style={{padding:5,textAlign:"right"}}>{p.n}</td>
+      <td style={{padding:5,textAlign:"right",color:p.wr>=46?P.gn:P.am}}>{fp(p.wr)}</td>
+      <td style={{padding:5,textAlign:"right",fontWeight:600,color:p.ret>0?P.gn:P.rd}}>{(p.ret>0?"+":"")+fp(p.ret,2)}</td>
+      <td style={{padding:5,textAlign:"right",color:p.dd<10?P.gn:P.rd}}>{fp(p.dd,2)}</td>
+      <td style={{padding:5,textAlign:"right",fontWeight:700,color:p.rr>0?P.gn:P.rd}}>{fm(p.rr)}</td>
+    </tr>);})}</tbody></table></div>:null}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:16}}>
+      <div><Hd t="Monthly Seasonals"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180}}><ResponsiveContainer><BarChart data={D.sm}><XAxis dataKey="n" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="RR" radius={[3,3,0,0]}>{D.sm.map(function(e,i){return <Cell key={i} fill={e.v>80?P.gn:e.v>30?P.ac:P.am}/>;})}</Bar></BarChart></ResponsiveContainer></div></div>
+      <div><Hd t="Day of Week"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180}}><ResponsiveContainer><BarChart data={D.sd}><XAxis dataKey="n" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="RR" radius={[3,3,0,0]}>{D.sd.map(function(e,i){return <Cell key={i} fill={e.v>150?P.gn:P.ac}/>;})}</Bar></BarChart></ResponsiveContainer></div></div>
+    </div>
+    <div style={{marginTop:24}}><Hd t="Asset Performance (click to drill down)"/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <div><div style={{fontSize:12,fontWeight:600,color:P.gn,marginBottom:8}}>Best Performing</div>
+          <div style={{maxHeight:300,overflowY:"auto"}}>{sr.filter(function(x){return x.rr>0;}).map(function(s,i){return(<div key={s.s} onClick={function(){props.onAsset(s.s);}} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 8px",borderBottom:"1px solid #3d3d3d20",cursor:"pointer",fontSize:11}} onMouseEnter={function(e){e.currentTarget.style.background="#FF8F1408";}} onMouseLeave={function(e){e.currentTarget.style.background="transparent";}}>
+            <span style={{width:20,color:P.td,fontSize:9}}>{i+1}</span>
+            <span style={{flex:1,fontWeight:600,color:P.tx}}>{s.s}</span>
+            <span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:(CC[s.c]||P.td)+"20",color:CC[s.c]||P.td}}>{s.c}</span>
+            <span style={{width:40,textAlign:"right",fontSize:10,color:P.td}}>{s.n}t</span>
+            <span style={{width:55,textAlign:"right",fontWeight:700,color:P.gn}}>+{fm(s.rr)}</span>
+          </div>);})}</div>
+        </div>
+        <div><div style={{fontSize:12,fontWeight:600,color:P.rd,marginBottom:8}}>Worst Performing</div>
+          <div style={{maxHeight:300,overflowY:"auto"}}>{sr.slice().reverse().filter(function(x){return x.rr<=0;}).map(function(s,i){return(<div key={s.s} onClick={function(){props.onAsset(s.s);}} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 8px",borderBottom:"1px solid #3d3d3d20",cursor:"pointer",fontSize:11}} onMouseEnter={function(e){e.currentTarget.style.background="#FF8F1408";}} onMouseLeave={function(e){e.currentTarget.style.background="transparent";}}>
+            <span style={{width:20,color:P.td,fontSize:9}}>{i+1}</span>
+            <span style={{flex:1,fontWeight:600,color:P.tx}}>{s.s}</span>
+            <span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:(CC[s.c]||P.td)+"20",color:CC[s.c]||P.td}}>{s.c}</span>
+            <span style={{width:40,textAlign:"right",fontSize:10,color:P.td}}>{s.n}t</span>
+            <span style={{width:55,textAlign:"right",fontWeight:700,color:P.rd}}>{fm(s.rr)}</span>
+          </div>);})}</div>
+        </div>
+      </div>
+    </div>
+  </div>);
+}
+
+function MonthDrill(props){
+  var m=props.m;var mdSrc=props.patchedData&&props.patchedData.md&&props.patchedData.md[m]?props.patchedData.md[m]:D.md[m];var md=mdSrc;
+  var mpnl2=props.patchedData?props.patchedData.mpnl:D.mpnl;
+  var pnl=mpnl2.find(function(p){return p.m===m;});
+  var eqData=D.mde[m]||md.eq;var cats=D.mdc[m]||[];
+  var sMd=useSort("rr");var sdMd=md?sMd.fn(md.lb):[];
+  var sCat=useSort("rr");var sdCat=sCat.fn(cats);
+  if(!md||!pnl) return <div><Bk on={props.back}/><div>No data for {m}</div></div>;
+  return(<div>
+    <Bk on={props.back} label="Back to overview"/>
+    <h2 style={{margin:"0 0 14px",fontSize:18,fontWeight:700,color:P.ac}}>{pnl.mu}</h2>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:8,marginBottom:18}}>
+      <Bx l="Trades" v={fi(pnl.n)}/><Bx l="Win Rate" v={fp(pnl.wr)} c={pnl.wr>=46?P.gn:P.am}/><Bx l="Return" v={(pnl.ret>0?"+":"")+fp(pnl.ret,2)} c={pnl.ret>0?P.gn:P.rd}/><Bx l="Max DD" v={fp(pnl.dd,2)} c={pnl.dd<10?P.gn:P.rd}/><Bx l="Sum RR" v={fm(pnl.rr)} c={pnl.rr>0?P.gn:P.rd}/><Bx l="Trig Rate" v={pnl.tgr>0?fp(pnl.tgr):"-"} c={pnl.tgr>35?P.gn:P.am}/>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:18}}>
+      <div><Hd t="Equity & Daily Trades"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:200}}>
+        <ResponsiveContainer><ComposedChart data={eqData}><defs><linearGradient id="mEq" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.cy} stopOpacity={0.3}/><stop offset="95%" stopColor={P.cy} stopOpacity={0}/></linearGradient></defs>
+          <CartesianGrid strokeDasharray="3 3" stroke={P.bd}/>
+          <XAxis dataKey="d" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Day of Month",position:"insideBottom",offset:-2,fontSize:8,fill:P.td}}/>
+          <YAxis yAxisId="eq" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} domain={[700,1300]} label={{value:"Equity",angle:-90,position:"insideLeft",fontSize:8,fill:P.td}}/>
+          <YAxis yAxisId="tc" orientation="right" tick={{fontSize:8,fill:P.am}} axisLine={false} tickLine={false} label={{value:"Trades",angle:90,position:"insideRight",fontSize:8,fill:P.am}}/>
+          <Tooltip {...TT}/>
+          <ReferenceLine yAxisId="eq" y={1000} stroke={P.td} strokeDasharray="3 3"/>
+          <Bar yAxisId="tc" dataKey="tc" name="Trades" fill={P.am+"40"} radius={[2,2,0,0]}/>
+          <Area yAxisId="eq" type="monotone" dataKey="eq" name="Equity" stroke={P.cy} fill="url(#mEq)" strokeWidth={2} dot={false}/>
+        </ComposedChart></ResponsiveContainer></div></div>
+      <div><Hd t="Analyst Leaderboard"/>
+        <div style={{background:P.cd,borderRadius:10,border:"1px solid "+P.bd,overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+            <Th k="a" sk={sMd.sort} tog={sMd.tog}>ANALYST</Th><Th k="n" sk={sMd.sort} tog={sMd.tog} a="right">TRADES</Th><Th k="wr" sk={sMd.sort} tog={sMd.tog} a="right">WIN%</Th><Th k="ret" sk={sMd.sort} tog={sMd.tog} a="right">RETURN</Th><Th k="dd" sk={sMd.sort} tog={sMd.tog} a="right">DD</Th><Th k="tgr" sk={sMd.sort} tog={sMd.tog} a="right">TRIG%</Th><Th k="rr" sk={sMd.sort} tog={sMd.tog} a="right">RR</Th>
+          </tr></thead><tbody>{sdMd.map(function(l,i){return(<tr key={l.a} style={{borderBottom:"1px solid #3d3d3d15"}}>
+            <td style={{padding:"5px 6px",fontWeight:600,color:isActive(l.a)?P.ac:P.td}}>{D.n[l.a]||l.a}</td>
+            <td style={{padding:"5px 4px",textAlign:"right"}}>{l.n}</td>
+            <td style={{padding:"5px 4px",textAlign:"right",color:l.wr>=46?P.gn:l.wr>=40?P.am:P.rd}}>{fp(l.wr)}</td>
+            <td style={{padding:"5px 4px",textAlign:"right",color:(l.ret||0)>0?P.gn:P.rd}}>{l.ret?((l.ret>0?"+":"")+fp(l.ret,2)):"-"}</td>
+            <td style={{padding:"5px 4px",textAlign:"right",color:(l.dd||0)<10?P.gn:P.rd}}>{l.dd!=null?fp(l.dd,2):"-"}</td>
+            <td style={{padding:"5px 4px",textAlign:"right",color:l.tgr>35?P.tx:P.am}}>{l.tgr?fp(l.tgr):"-"}</td>
+            <td style={{padding:"5px 4px",textAlign:"right",fontWeight:700,color:l.rr>0?P.gn:P.rd}}>{fm(l.rr)}</td>
+          </tr>);})}</tbody></table>
+        </div>
+      </div>
+    </div>
+    {cats.length>0?<div style={{marginBottom:18}}><Hd t="Asset Class Leaderboard"/>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+        <Th k="c" sk={sCat.sort} tog={sCat.tog}>CLASS</Th><Th k="n" sk={sCat.sort} tog={sCat.tog} a="right">TRADES</Th><Th k="w" sk={sCat.sort} tog={sCat.tog} a="right">WINS</Th><Th k="ret" sk={sCat.sort} tog={sCat.tog} a="right">RETURN</Th><Th k="dd" sk={sCat.sort} tog={sCat.tog} a="right">DD</Th><Th k="tgr" sk={sCat.sort} tog={sCat.tog} a="right">TRIG%</Th><Th k="rr" sk={sCat.sort} tog={sCat.tog} a="right">RR</Th>
+      </tr></thead><tbody>{sdCat.map(function(c){return(<tr key={c.c} style={{borderBottom:"1px solid #3d3d3d15"}}>
+        <td style={{padding:"6px 8px",fontWeight:600}}><span style={{color:CC[c.c]||P.tx}}>{c.c}</span></td>
+        <td style={{padding:6,textAlign:"right"}}>{c.n}</td><td style={{padding:6,textAlign:"right"}}>{c.w}</td>
+        <td style={{padding:6,textAlign:"right",fontWeight:600,color:c.ret>0?P.gn:P.rd}}>{(c.ret>0?"+":"")+fp(c.ret,2)}</td>
+        <td style={{padding:6,textAlign:"right",color:c.dd<10?P.gn:P.rd}}>{fp(c.dd,2)}</td>
+        <td style={{padding:6,textAlign:"right",color:c.tgr>35?P.tx:P.am}}>{c.tgr?fp(c.tgr):"-"}</td>
+        <td style={{padding:6,textAlign:"right",fontWeight:700,color:c.rr>0?P.gn:P.rd}}>{fm(c.rr)}</td>
+      </tr>);})}</tbody></table></div>
+    </div>:null}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div><Hd t="Best Performers (5)"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd}}>
+        <div style={{display:"flex",padding:"0 0 6px",borderBottom:"1px solid "+P.bd,marginBottom:4}}><span style={{flex:1,fontSize:10,color:P.td}}>SYMBOL</span><span style={{width:60,textAlign:"right",fontSize:10,color:P.td}}>RR</span></div>
+        {(md.b5||[]).map(function(s){return <div key={s.s} style={{display:"flex",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #3d3d3d15",fontSize:12}}><span style={{flex:1}}><Sym s={s.s} onAsset={props.onAsset}/></span><span style={{width:60,textAlign:"right",fontWeight:700,color:P.gn}}>+{fm(s.rr)}</span></div>;})}
+      </div></div>
+      <div><Hd t="Worst Performers (5)"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd}}>
+        <div style={{display:"flex",padding:"0 0 6px",borderBottom:"1px solid "+P.bd,marginBottom:4}}><span style={{flex:1,fontSize:10,color:P.td}}>SYMBOL</span><span style={{width:60,textAlign:"right",fontSize:10,color:P.td}}>RR</span></div>
+        {(md.w5||[]).map(function(s){return <div key={s.s} style={{display:"flex",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #3d3d3d15",fontSize:12}}><span style={{flex:1}}><Sym s={s.s} onAsset={props.onAsset}/></span><span style={{width:60,textAlign:"right",fontWeight:700,color:P.rd}}>{fm(s.rr)}</span></div>;})}
+      </div></div>
+    </div>
+  </div>);
+}
+
+function AnalystList(props){
+  var[period,setPeriod]=useState("all");var years=D.yr||[];
+  var quarters=["Q1","Q2","Q3","Q4"];var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var sAl=useSort("sr");
+  var pd5=props.patchedData||{};
+  var raw=useMemo(function(){
+    if(period==="all") return D.a.slice();var results=[];
+    D.a.forEach(function(a){var mos=(D.am[a.id]||[]).slice();
+      if(pd5.ad&&pd5.ad[a.id]&&mos.length>0){
+        var last=mos[mos.length-1];var days5=pd5.ad[a.id]||[];
+        if(days5.length>0){
+          var tn5=0,tw5=0,trr5=0;days5.forEach(function(dd5){tn5+=dd5.n;tw5+=dd5.w;trr5+=dd5.rr;});
+          var wp5=tn5>0?Math.round(tw5/tn5*1000)/10:0;
+          var eq5=pd5.aeq&&pd5.aeq[a.id]?pd5.aeq[a.id]:[];
+          var pk5=1000;var mdd5=0;eq5.forEach(function(e){if(e.eq>pk5)pk5=e.eq;var cd5=(pk5-e.eq)/pk5*100;if(cd5>mdd5)mdd5=cd5;});
+          var ret5=eq5.length>0?Math.round((eq5[eq5.length-1].eq/1000-1)*10000)/100:0;
+          var tgr5=pd5.atgr&&pd5.atgr[a.id]!=null?pd5.atgr[a.id]:last.tgr;
+          mos[mos.length-1]=Object.assign({},last,{n:tn5,w:tw5,wr:wp5,ret:ret5,dd:Math.round(mdd5*100)/100,tgr:tgr5,rr:Math.round(trr5*10)/10});
+        }
+      }
+      var filtered=[];
+      if(period.length===4){filtered=mos.filter(function(m){return "20"+m.m.slice(0,2)===period;});}
+      else if(period.indexOf("-Q")>-1){var yr=period.slice(0,4);var q=parseInt(period.slice(6));var qm=[[1,2,3],[4,5,6],[7,8,9],[10,11,12]][q-1];filtered=mos.filter(function(m){return "20"+m.m.slice(0,2)===yr&&qm.indexOf(parseInt(m.m.slice(3,5)))>=0;});}
+      else if(period.length>=6){var yrm=period.slice(0,4);var mmm=period.slice(5,7);filtered=mos.filter(function(m){return "20"+m.m.slice(0,2)===yrm&&m.m.slice(3,5)===mmm;});}
+      if(filtered.length>0){var tn=0,tw=0,trr=0;filtered.forEach(function(m){tn+=m.n;tw+=m.w;trr+=m.rr;});results.push({id:a.id,tr:tn,w:tw,wr:Math.round(tw/tn*1000)/10,sr:Math.round(trr*10)/10,tgr:a.tgr,rr:a.rr,ts:a.ts});}
+    });return results;
+  },[period,pd5]);
+  return(<div><Hd t="Analyst Leaderboard"/>
+    <div style={{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
+      <span style={{fontSize:10,color:P.td,marginRight:4}}>PERIOD:</span>
+      <Btn on={function(){setPeriod("all");}} active={period==="all"}>All Time</Btn>
+      {years.map(function(y){return <Btn key={y.y} on={function(){setPeriod(y.y);}} active={period===y.y}>{y.y}</Btn>;})}
+    </div>
+    {period!=="all"&&period.length===4?<div style={{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap"}}>
+      <span style={{fontSize:10,color:P.td,marginRight:4}}>QUARTER:</span>
+      {quarters.map(function(q){return <Btn key={q} on={function(){setPeriod(period.slice(0,4)+"-"+q);}} active={period===period.slice(0,4)+"-"+q}>{q}</Btn>;})}
+      <span style={{fontSize:10,color:P.td,marginLeft:8,marginRight:4}}>MONTH:</span>
+      {months.map(function(m,mi){var mv=period.slice(0,4)+"-"+(mi<9?"0":"")+(mi+1);return <Btn key={m} on={function(){setPeriod(mv);}} active={period===mv}>{m}</Btn>;})}
+    </div>:null}
+    <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+      <Th k="id" sk={sAl.sort} tog={sAl.tog}>ANALYST</Th><th style={{padding:"6px 8px",textAlign:"left",color:P.td,fontSize:10}}>STATUS</th><Th k="tr" sk={sAl.sort} tog={sAl.tog} a="right">TRADES</Th><Th k="wr" sk={sAl.sort} tog={sAl.tog} a="right">WIN%</Th><Th k="sr" sk={sAl.sort} tog={sAl.tog} a="right">SUM RR</Th><Th k="tgr" sk={sAl.sort} tog={sAl.tog} a="right">TRIG%</Th>
+    </tr></thead><tbody>
+      {sAl.fn(raw).filter(function(a){return isActive(a.id);}).map(function(a){return(<tr key={a.id} onClick={function(){props.sel(a.id);}} style={{borderBottom:"1px solid #3d3d3d20",cursor:"pointer"}} onMouseEnter={function(e){e.currentTarget.style.background="#FF8F1410";}} onMouseLeave={function(e){e.currentTarget.style.background="transparent";}}>
+      <td style={{padding:"7px 8px",fontWeight:600,color:P.ac}}>{D.n[a.id]||a.id}</td>
+      <td style={{padding:"7px 8px"}}><span style={{fontSize:9,padding:"1px 6px",borderRadius:3,background:"#22c58320",color:P.gn}}>Active</span></td>
+      <td style={{padding:7,textAlign:"right"}}>{fi(a.tr)}</td><td style={{padding:7,textAlign:"right",color:a.wr>=46?P.gn:a.wr>=42?P.am:P.rd}}>{fp(a.wr)}</td>
+      <td style={{padding:7,textAlign:"right",fontWeight:700,color:a.sr>0?P.gn:P.rd}}>{fm(a.sr)}</td><td style={{padding:7,textAlign:"right"}}>{a.tgr>0?fp(a.tgr):"-"}</td>
+    </tr>);})}
+      <tr><td colSpan={6} style={{padding:"10px 8px",borderBottom:"2px solid "+P.bd}}><span style={{fontSize:10,color:P.td,fontWeight:600,letterSpacing:".05em"}}>INACTIVE ANALYSTS</span></td></tr>
+      {sAl.fn(raw).filter(function(a){return !isActive(a.id);}).map(function(a){return(<tr key={a.id} onClick={function(){props.sel(a.id);}} style={{borderBottom:"1px solid #3d3d3d20",cursor:"pointer",opacity:0.55}} onMouseEnter={function(e){e.currentTarget.style.background="#FF8F1410";}} onMouseLeave={function(e){e.currentTarget.style.background="transparent";}}>
+      <td style={{padding:"7px 8px",fontWeight:600,color:P.td}}>{D.n[a.id]||a.id}</td>
+      <td style={{padding:"7px 8px"}}><span style={{fontSize:9,padding:"1px 6px",borderRadius:3,background:"#66666625",color:P.td}}>Inactive</span></td>
+      <td style={{padding:7,textAlign:"right"}}>{fi(a.tr)}</td><td style={{padding:7,textAlign:"right",color:a.wr>=46?P.gn:a.wr>=42?P.am:P.rd}}>{fp(a.wr)}</td>
+      <td style={{padding:7,textAlign:"right",fontWeight:700,color:a.sr>0?P.gn:P.rd}}>{fm(a.sr)}</td><td style={{padding:7,textAlign:"right"}}>{a.tgr>0?fp(a.tgr):"-"}</td>
+    </tr>);})}
+    </tbody></table></div>
+  </div>);
+}
+
+function AnalystDrill(props){
+  var id=props.id;var mos=(D.am[id]||[]).slice();var info=D.a.find(function(x){return x.id===id;});var nm=D.n[id]||id;
+  if(props.patchedData&&props.patchedData.ad&&props.patchedData.ad[id]){
+    var pd4=props.patchedData;var days4=pd4.ad[id]||[];
+    if(days4.length>0&&mos.length>0){
+      var lastMo=mos[mos.length-1];
+      var tn4=0;var tw4=0;var trr4=0;
+      days4.forEach(function(dd4){tn4+=dd4.n;tw4+=dd4.w;trr4+=dd4.rr;});
+      var wp4=tn4>0?Math.round(tw4/tn4*1000)/10:0;
+      var eq4=pd4.aeq&&pd4.aeq[id]?pd4.aeq[id]:[];
+      var pk4=1000;var mdd4=0;eq4.forEach(function(e){if(e.eq>pk4)pk4=e.eq;var cd4=(pk4-e.eq)/pk4*100;if(cd4>mdd4)mdd4=cd4;});
+      var ret4=eq4.length>0?Math.round((eq4[eq4.length-1].eq/1000-1)*10000)/100:0;
+      var tgr4=pd4.atgr&&pd4.atgr[id]?pd4.atgr[id]:lastMo.tgr;
+      mos[mos.length-1]=Object.assign({},lastMo,{n:tn4,w:tw4,wr:wp4,ret:ret4,dd:Math.round(mdd4*100)/100,tgr:tgr4,rr:Math.round(trr4*10)/10});
+    }
+  }
+  var sAd=useSort(null);var years={};mos.forEach(function(m){var y="20"+m.m.slice(0,2);if(!years[y])years[y]=[];years[y].push(m);});
+  var yrRows=Object.keys(years).sort().map(function(y){var ms=years[y];var tn=0,tw=0,trr=0,tdd=0;ms.forEach(function(m){tn+=m.n;tw+=m.w;trr+=m.rr;tdd+=m.dd||0;});return{y:y,tn:tn,tw:tw,wr2:tn>0?Math.round(tw/tn*1000)/10:0,trr:Math.round(trr*10)/10,avgdd:ms.length>0?Math.round(tdd/ms.length*100)/100:0};});
+  return(<div><Bk on={props.back} label="Back to leaderboard"/>
+    <h2 style={{margin:"0 0 14px",fontSize:20,fontWeight:700,color:P.ac}}>{nm}</h2>
+    {info?<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8,marginBottom:20}}>
+      <Bx l="Trades" v={fi(info.tr)}/><Bx l="Win Rate" v={fp(info.wr)} c={info.wr>=46?P.gn:P.am}/><Bx l="Sum RR" v={fm(info.sr)} c={info.sr>0?P.gn:P.rd}/><Bx l="Trig Rate" v={info.tgr>0?fp(info.tgr):"-"}/>
+    </div>:null}
+    <Hd t="Monthly R/R"/><div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:200,marginBottom:16}}><ResponsiveContainer><BarChart data={mos.slice(-24)}><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="mu" tick={{fontSize:7,fill:P.td}} axisLine={false} tickLine={false} interval={2}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="rr" name="RR" radius={[3,3,0,0]}>{mos.slice(-24).map(function(e,i){return <Cell key={i} fill={e.rr>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer></div>
+    <Hd t="Yearly Breakdown (click for months)"/>
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+      <Th k="y" sk={sAd.sort} tog={sAd.tog}>YEAR</Th><Th k="tn" sk={sAd.sort} tog={sAd.tog} a="right">TRADES</Th><Th k="wr2" sk={sAd.sort} tog={sAd.tog} a="right">WIN%</Th><Th k="trr" sk={sAd.sort} tog={sAd.tog} a="right">SUM RR</Th><Th k="avgdd" sk={sAd.sort} tog={sAd.tog} a="right">AVG DD</Th>
+    </tr></thead><tbody>{sAd.fn(yrRows).map(function(r){return(<tr key={r.y} onClick={function(){props.onYr(r.y);}} style={{borderBottom:"1px solid #3d3d3d20",cursor:"pointer"}} onMouseEnter={function(e){e.currentTarget.style.background="#FF8F1410";}} onMouseLeave={function(e){e.currentTarget.style.background="transparent";}}>
+      <td style={{padding:"7px 8px",fontWeight:600,color:P.ac}}>{r.y}</td><td style={{padding:7,textAlign:"right"}}>{r.tn}</td>
+      <td style={{padding:7,textAlign:"right",color:r.wr2>=46?P.gn:P.am}}>{fp(r.wr2)}</td>
+      <td style={{padding:7,textAlign:"right",fontWeight:700,color:r.trr>0?P.gn:P.rd}}>{fm(r.trr)}</td>
+      <td style={{padding:7,textAlign:"right",color:r.avgdd<10?P.gn:P.rd}}>{fp(r.avgdd,2)}</td>
+    </tr>);})}</tbody></table>
+    {function(){var seas=D.as&&D.as[id];if(!seas)return null;return(<div style={{marginTop:20}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:18}}>
+        <div><Hd t="Day of Week"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:160}}>
+          <ResponsiveContainer><BarChart data={seas.dow}><XAxis dataKey="n" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="Sum RR" radius={[3,3,0,0]}>{seas.dow.map(function(e,i){return <Cell key={i} fill={e.v>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer>
+        </div></div>
+        <div><Hd t="Month of Year"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:160}}>
+          <ResponsiveContainer><BarChart data={seas.moy}><XAxis dataKey="n" tick={{fontSize:8,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="Sum RR" radius={[3,3,0,0]}>{seas.moy.map(function(e,i){return <Cell key={i} fill={e.v>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer>
+        </div></div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <div><Hd t="Best Assets"/>
+          <div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd}}>
+            <div style={{display:"flex",padding:"0 0 6px",borderBottom:"1px solid "+P.bd,marginBottom:4}}>
+              <span style={{flex:1,fontSize:10,color:P.td}}>SYMBOL</span><span style={{width:40,textAlign:"right",fontSize:10,color:P.td}}>TRADES</span><span style={{width:60,textAlign:"right",fontSize:10,color:P.td}}>RR</span>
+            </div>
+            {(seas.best||[]).map(function(s){return <div key={s.s} style={{display:"flex",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #3d3d3d15",fontSize:11}}><span style={{flex:1}}><Sym s={s.s} onAsset={props.onAsset}/></span><span style={{width:40,textAlign:"right",color:P.td,fontSize:10}}>{s.n}</span><span style={{width:60,textAlign:"right",fontWeight:700,color:P.gn}}>+{fm(s.rr)}</span></div>;})}
+          </div>
+        </div>
+        <div><Hd t="Worst Assets"/>
+          <div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd}}>
+            <div style={{display:"flex",padding:"0 0 6px",borderBottom:"1px solid "+P.bd,marginBottom:4}}>
+              <span style={{flex:1,fontSize:10,color:P.td}}>SYMBOL</span><span style={{width:40,textAlign:"right",fontSize:10,color:P.td}}>TRADES</span><span style={{width:60,textAlign:"right",fontSize:10,color:P.td}}>RR</span>
+            </div>
+            {(seas.worst||[]).map(function(s){return <div key={s.s} style={{display:"flex",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #3d3d3d15",fontSize:11}}><span style={{flex:1}}><Sym s={s.s} onAsset={props.onAsset}/></span><span style={{width:40,textAlign:"right",color:P.td,fontSize:10}}>{s.n}</span><span style={{width:60,textAlign:"right",fontWeight:700,color:P.rd}}>{fm(s.rr)}</span></div>;})}
+          </div>
+        </div>
+      </div>
+    </div>);}()}
+  </div>);
+}
+
+function AnalystYearDrill(props){
+  var id=props.id;var yr=props.yr;var sAy=useSort(null);
+  var mos=(D.am[id]||[]).filter(function(m){return m.m.startsWith(yr.slice(2));});
+  return(<div><Bk on={props.back} label={"Back to "+(D.n[id]||id)}/>
+    <h2 style={{margin:"0 0 10px",fontSize:18,fontWeight:700,color:P.ac}}>{D.n[id]||id} - {yr}</h2>
+    <TLKey/>
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+      <th style={{padding:6,width:25}}></th><Th k="mu" sk={sAy.sort} tog={sAy.tog}>MONTH</Th><Th k="n" sk={sAy.sort} tog={sAy.tog} a="right">TRADES</Th><Th k="wr" sk={sAy.sort} tog={sAy.tog} a="right">WIN%</Th><Th k="ret" sk={sAy.sort} tog={sAy.tog} a="right">RETURN</Th><Th k="dd" sk={sAy.sort} tog={sAy.tog} a="right">DD</Th><Th k="tgr" sk={sAy.sort} tog={sAy.tog} a="right">TRIG%</Th><Th k="rr" sk={sAy.sort} tog={sAy.tog} a="right">RR</Th><th style={{padding:"6px 4px",textAlign:"left",color:P.td,fontSize:10}}>BEST</th><th style={{padding:"6px 4px",textAlign:"left",color:P.td,fontSize:10}}>WORST</th>
+    </tr></thead><tbody>{sAy.fn(mos).map(function(m){return(<tr key={m.m} style={{borderBottom:"1px solid #3d3d3d20"}}>
+      <td style={{padding:6}}><Dot c={m.l}/></td><td style={{padding:"6px 6px",color:P.ac,fontWeight:600}}>{m.mu}</td>
+      <td style={{padding:6,textAlign:"right"}}>{m.n}</td><td style={{padding:6,textAlign:"right",color:m.wr>=45?P.gn:m.wr>=38?P.am:P.rd}}>{fp(m.wr)}</td>
+      <td style={{padding:6,textAlign:"right",fontWeight:600,color:m.ret>0?P.gn:P.rd}}>{(m.ret>0?"+":"")+fp(m.ret,2)}</td>
+      <td style={{padding:6,textAlign:"right",color:m.dd<10?P.gn:P.rd}}>{fp(m.dd,2)}</td>
+      <td style={{padding:6,textAlign:"right",color:m.tgr>35?P.tx:P.am}}>{m.tgr>0?fp(m.tgr):"-"}</td>
+      <td style={{padding:6,textAlign:"right",color:m.rr>0?P.gn:P.rd}}>{fm(m.rr)}</td>
+      <td style={{padding:6,fontSize:10,color:P.gn}}>{m.bs?<Sym s={m.bs} onAsset={props.onAsset} c={P.gn}/>:"-"}{m.br?" (+"+fm(m.br)+")":""}</td>
+      <td style={{padding:6,fontSize:10,color:P.rd}}>{m.ws?<Sym s={m.ws} onAsset={props.onAsset} c={P.rd}/>:"-"}{m.wrs?" ("+fm(m.wrs)+")":""}</td>
+    </tr>);})}</tbody></table>
+  </div>);
+}
+
+function KPIDash(props){
+  var mpnl2=props.patchedData?props.patchedData.mpnl:D.mpnl;
+  var cur=mpnl2[mpnl2.length-1];var ck=cur?cur.m.slice(2):"";var ids=ACTIVE;
+  var cKPI=[];
+  if(props.patchedData&&props.patchedData.ad){
+    var pd3=props.patchedData;
+    ids.forEach(function(a){
+      var days=pd3.ad[a]||[];if(days.length===0)return;
+      var tn=0;var tw=0;var trr=0;
+      days.forEach(function(dd3){tn+=dd3.n;tw+=dd3.w;trr+=dd3.rr;});
+      var wp=tn>0?Math.round(tw/tn*1000)/10:0;
+      var eq2=pd3.aeq&&pd3.aeq[a]?pd3.aeq[a]:[];
+      var pk2=1000;var mdd2=0;eq2.forEach(function(e){if(e.eq>pk2)pk2=e.eq;var cd2=(pk2-e.eq)/pk2*100;if(cd2>mdd2)mdd2=cd2;});
+      var ret3=eq2.length>0?Math.round((eq2[eq2.length-1].eq/1000-1)*10000)/100:0;
+      var tgr2=pd3.atgr&&pd3.atgr[a]?pd3.atgr[a]:0;
+      var l2=tn<10?"grey":wp>=45&&ret3>0&&mdd2<10&&(tgr2>=35||tgr2===0)?"green":wp<35||ret3<-5||mdd2>=10?"red":"amber";
+      cKPI.push({a:a,mu:cur?cur.mu:"",n:tn,w:tw,wr:wp,ret:ret3,dd:Math.round(mdd2*100)/100,tgr:tgr2,rr:Math.round(trr*10)/10,l:l2});
+    });
+  }else{
+    ids.forEach(function(a){(D.am[a]||[]).forEach(function(m){if(m.m===ck){cKPI.push({a:a,mu:m.mu,n:m.n,w:m.w,wr:m.wr,ret:m.ret,dd:m.dd,tgr:m.tgr,rr:m.rr,l:m.l});}});});
+  }
+  var kh=D.kh||{};
+  var kpiMetrics=["wr","ret","dd","tgr"];
+  var kpiLabels={wr:"Win Rate",ret:"Return",dd:"Drawdown",tgr:"Trig Rate"};
+  var kpiTargets={wr:45,ret:0,dd:10,tgr:35};
+  function kpiPass(k,v){if(k==="wr")return v>=45;if(k==="ret")return v>0;if(k==="dd")return v<10;if(k==="tgr")return v>=35;return false;}
+  return(<div>
+    <Hd t={"Current Month: "+(cur?cur.mu:"")}/>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:24}}>
+      {cKPI.map(function(k){
+        var met=[{label:"Win Rate",val:fp(k.wr),pass:k.wr>=45,target:"45%+"},{label:"Return",val:(k.ret>0?"+":"")+fp(k.ret,2),pass:k.ret>0,target:">0%"},{label:"Drawdown",val:fp(k.dd,2),pass:k.dd<10,target:"<10%"},{label:"Trig Rate",val:k.tgr>0?fp(k.tgr):"-",pass:k.tgr>35,target:">35%"}];
+        var pc=met.filter(function(m){return m.pass;}).length;
+        return(<div key={k.a} style={{background:P.cd,borderRadius:12,padding:16,border:"2px solid "+(pc===4?P.gn:pc>=2?P.am:P.rd)}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontSize:14,fontWeight:700,color:P.ac}}>{D.n[k.a]||k.a}</div>
+            <div style={{display:"flex",gap:4}}>{met.map(function(m,i){return <div key={i} style={{width:8,height:8,borderRadius:"50%",background:m.pass?P.gn:P.rd}}/>;})}</div>
+          </div>
+          {met.map(function(m){return(<div key={m.label} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid #3d3d3d20",fontSize:11}}>
+            <span style={{color:P.tm}}>{m.label}</span><div style={{display:"flex",gap:8}}><span style={{color:P.td,fontSize:10}}>target: {m.target}</span><span style={{fontWeight:600,color:m.pass?P.gn:P.rd}}>{m.val}</span></div>
+          </div>);})}
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:11}}><span style={{color:P.tm}}>{k.n} trades, {k.w} wins</span><span style={{fontWeight:700,color:k.rr>0?P.gn:P.rd}}>RR: {fm(k.rr)}</span></div>
+        </div>);
+      })}
+    </div>
+    <Hd t="Historic KPI Performance"/>
+    <div style={{display:"grid",gridTemplateColumns:"1fr",gap:24}}>
+      {Object.keys(kh).filter(function(a){return isActive(a);}).map(function(a){var hist=kh[a];if(!hist||hist.length===0)return null;
+        var act=isActive(a);
+        var allHit=hist.map(function(h){return h.wr>=45&&h.ret>0&&h.dd<10&&(h.tgr>=35||h.tgr===0);});
+        var hitCount=allHit.filter(Boolean).length;
+        return(<div key={a} style={{background:P.cd,borderRadius:12,padding:18,border:"1px solid "+P.bd}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{fontSize:15,fontWeight:700,color:P.ac,fontFamily:"'DM Serif Text',serif"}}>{D.n[a]||a}</div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:10,color:P.gn,fontWeight:600}}>{hitCount}/{hist.length} months on target</span>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:2,marginBottom:16}}>
+            {hist.map(function(h,i){var hit=allHit[i];return(<div key={i} title={h.mu+(hit?" - All targets hit":" - Targets missed")} style={{flex:1,height:6,borderRadius:3,background:hit?P.gn:P.rd,opacity:0.7}}/>);})}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:0}}>
+            {kpiMetrics.map(function(k,ki){
+              return(<div key={k} style={{padding:"0 12px",borderLeft:ki>0?"2px solid "+P.bd:"none"}}>
+                <div style={{fontSize:10,color:P.td,marginBottom:6,textTransform:"uppercase",fontWeight:600,letterSpacing:".04em"}}>{kpiLabels[k]} <span style={{fontWeight:400,opacity:0.7}}>{k==="dd"?"<"+kpiTargets[k]+"%":k==="ret"?">0%":"\u2265"+kpiTargets[k]+"%"}</span></div>
+                <div style={{display:"flex",gap:2,alignItems:"flex-end",height:50}}>
+                  {hist.map(function(h,i){
+                    var v=h[k]||0;var pass=kpiPass(k,v);
+                    var barH=k==="dd"?Math.min(Math.abs(v)/20*50,50):k==="ret"?Math.min(Math.abs(v)/30*50,50):Math.min(v/80*50,50);
+                    barH=Math.max(barH,4);
+                    return(<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:1}} title={h.mu+": "+(k==="ret"&&v>0?"+":"")+fm(v,1)+(k!=="ret"?"%":"")}>
+                      <div style={{width:"100%",height:barH,borderRadius:2,background:pass?P.gn:P.rd,opacity:0.8}}/>
+                    </div>);
+                  })}
+                </div>
+                <div style={{display:"flex",gap:2,marginTop:3}}>
+                  {hist.map(function(h,i){return <div key={i} style={{flex:1,textAlign:"center",fontSize:7,color:P.td,overflow:"hidden"}}>{i%3===0?h.mu.slice(0,3):""}</div>;})}
+                </div>
+                <div style={{fontSize:11,fontWeight:600,marginTop:4,color:kpiPass(k,hist[hist.length-1][k])?P.gn:P.rd}}>{k==="ret"?(hist[hist.length-1].ret>0?"+":"")+fp(hist[hist.length-1].ret,2):fp(hist[hist.length-1][k])}</div>
+              </div>);
+            })}
+          </div>
+        </div>);
+      })}
+    </div>
+  </div>);
+}
+
+function FlagModal(props){
+  var[reason,setReason]=useState("Incorrect trigger");
+  var ov={position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999};
+  return(<div style={ov} onClick={props.onClose}><div onClick={function(e){e.stopPropagation();}} style={{background:P.cd,borderRadius:12,padding:20,border:"1px solid "+P.bd,width:340,maxWidth:"90vw"}}>
+    <div style={{fontSize:14,fontWeight:700,color:P.ac,marginBottom:12,fontFamily:"'DM Serif Text',serif"}}>Flag Trade</div>
+    <div style={{fontSize:11,color:P.tm,marginBottom:8}}>{props.data.sym} {props.data.dir} — {D.n[props.data.an]||props.data.an}</div>
+    <div style={{fontSize:10,color:P.td,marginBottom:4}}>Reason</div>
+    <input value={reason} onChange={function(e){setReason(e.target.value);}} style={{width:"100%",padding:"8px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit",marginBottom:14,boxSizing:"border-box"}}/>
+    <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+      <button onClick={props.onClose} style={{padding:"6px 14px",background:"transparent",border:"1px solid "+P.bd,color:P.tm,borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>Cancel</button>
+      <button onClick={function(){props.onSubmit(reason);}} style={{padding:"6px 14px",background:P.am,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Flag Trade</button>
+    </div>
+  </div></div>);
+}
+
+function OverrideModal(props){
+  var[entry,setEntry]=useState("");var[exit2,setExit]=useState("");var[rr,setRR]=useState("");
+  var ov={position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999};
+  var inp={width:"100%",padding:"8px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit",marginBottom:10,boxSizing:"border-box"};
+  return(<div style={ov} onClick={props.onClose}><div onClick={function(e){e.stopPropagation();}} style={{background:P.cd,borderRadius:12,padding:20,border:"1px solid "+P.bd,width:340,maxWidth:"90vw"}}>
+    <div style={{fontSize:14,fontWeight:700,color:P.gn,marginBottom:12,fontFamily:"'DM Serif Text',serif"}}>Mark as Triggered</div>
+    <div style={{fontSize:11,color:P.tm,marginBottom:12}}>{props.data.sym} {props.data.dir} — {D.n[props.data.an]||props.data.an} on {props.data.d}</div>
+    <div style={{fontSize:10,color:P.td,marginBottom:4}}>Entry Price</div>
+    <input value={entry} onChange={function(e){setEntry(e.target.value);}} placeholder="0.00" style={inp}/>
+    <div style={{fontSize:10,color:P.td,marginBottom:4}}>Exit Price</div>
+    <input value={exit2} onChange={function(e){setExit(e.target.value);}} placeholder="0.00" style={inp}/>
+    <div style={{fontSize:10,color:P.td,marginBottom:4}}>R:R Value</div>
+    <input value={rr} onChange={function(e){setRR(e.target.value);}} placeholder="0.00" style={inp}/>
+    <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+      <button onClick={props.onClose} style={{padding:"6px 14px",background:"transparent",border:"1px solid "+P.bd,color:P.tm,borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>Cancel</button>
+      <button onClick={function(){props.onSubmit({entry:parseFloat(entry)||0,exit:parseFloat(exit2)||0,rr:parseFloat(rr)||0});}} style={{padding:"6px 14px",background:P.gn,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Confirm Triggered</button>
+    </div>
+  </div></div>);
+}
+
+
+function Monitor(props){
+  if(props.monDay&&!props.monA) return <DayDrill day={props.monDay} back={function(){props.setMonDay(null);}} flags={props.flags} setFlags={props.setFlags} onAsset={props.onAsset} setFlagModal={props.setFlagModal} overrides={props.overrides} applyOverrides={props.applyOverrides} patchedDd={props.patchedData&&props.patchedData.dd?props.patchedData.dd:null}/>;
+  if(props.monA) return <AnalystMonitor id={props.monA} back={function(){props.setMonA(null);props.setMonDay(null);}} flags={props.flags} setFlags={props.setFlags} monDay={props.monDay} setMonDay={props.setMonDay} onAsset={props.onAsset} setFlagModal={props.setFlagModal} setOverModal={props.setOverModal} overrides={props.overrides} applyOverrides={props.applyOverrides} patchedData={props.patchedData} patchedDd={props.patchedData&&props.patchedData.dd?props.patchedData.dd:null}/>;
+  var dp=props.patchedData?props.patchedData.dp:D.dp;
+  return(<div>
+    <Hd t={"Monitor - Last 30 Trading Days"}/>
+    {props.overrides&&props.overrides.length>0?<div style={{background:"#22c58315",border:"1px solid "+P.gn,borderRadius:8,padding:10,marginBottom:14}}>
+      <div style={{fontSize:11,fontWeight:600,color:P.gn,marginBottom:6}}>Amended Trades ({props.overrides.length})</div>
+      {props.overrides.map(function(o,i){return(<div key={i} style={{fontSize:10,color:P.tm,padding:"3px 0",borderBottom:"1px solid #3d3d3d15"}}>
+        <span style={{color:P.ac}}>{D.n[o.an]||o.an}</span> - {o.sym} {o.dir} on {o.d} — Entry: {o.entry} Exit: {o.exit} <span style={{fontWeight:700,color:o.rr>0?P.gn:P.rd}}>RR: {fm(o.rr,3)}</span>
+      </div>);})}
+    </div>:null}
+    {props.flags.length>0?<div style={{background:"#FF8F1415",border:"1px solid "+P.am,borderRadius:8,padding:10,marginBottom:14}}>
+      <div style={{fontSize:11,fontWeight:600,color:P.am,marginBottom:6}}>Flagged Trades ({props.flags.length})</div>
+      {props.flags.map(function(f,i){return(<div key={i} style={{fontSize:10,color:P.tm,padding:"4px 0",borderBottom:"1px solid #3d3d3d20",display:"flex",alignItems:"center",gap:6}}>
+        <div style={{flex:1}}>{f.st?<Badge st={f.st}/>:null} <span style={{color:P.ac}}>{D.n[f.an]||f.an}</span> - {f.sym} {f.dir} on {f.d} <span style={{color:P.am,fontSize:10}}>{f.reason}</span></div>
+        {f.st==="pending"||f.reason&&f.reason.indexOf("OVERRIDDEN")>=0?<button onClick={function(){props.setOverModal({an:f.an,sym:f.sym,dir:f.dir,d:f.d,idx:i});}} style={{padding:"3px 8px",background:P.gn+"20",border:"1px solid "+P.gn,color:P.gn,borderRadius:4,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>{f.reason&&f.reason.indexOf("OVERRIDDEN")>=0?"Update":"Mark Triggered"}</button>:null}
+        <button onClick={function(){props.setFlags(function(p){return p.filter(function(_,j){return j!==i;});});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.rd,color:P.rd,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>{"\u00D7"}</button>
+      </div>);})}
+    </div>:null}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(44px,1fr))",gap:4,marginBottom:20}}>
+      {dp.map(function(d){var bg=d.rr>0?"#22c58318":d.rr<0?"#f0484818":"transparent";var dParts=d.d.split("-");var dLabel=parseInt(dParts[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(dParts[1])];return(<div key={d.d} onClick={function(){props.setMonDay(d.d);}} style={{padding:"4px 2px",borderRadius:6,background:bg,border:"1px solid "+P.bd,cursor:"pointer",textAlign:"center"}} onMouseEnter={function(e){e.currentTarget.style.borderColor=P.ac;}} onMouseLeave={function(e){e.currentTarget.style.borderColor=P.bd;}}>
+        <div style={{fontSize:10,fontWeight:700,color:P.tx}}>{dLabel}</div>
+        <div style={{fontSize:9,color:P.td}}>{d.n}t</div>
+        <div style={{fontSize:10,fontWeight:600,color:d.rr>0?P.gn:P.rd}}>{fm(d.rr,2)}</div>
+        <div style={{fontSize:8,color:P.cy}}>T:{fp(d.tgr,0)}</div>
+      </div>);})}
+    </div>
+    <Hd t="Analyst Quick Access"/>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8}}>
+      {ACTIVE.map(function(a){return(<div key={a} onClick={function(){props.setMonA(a);}} style={{padding:"12px 14px",background:P.cd,borderRadius:10,border:"1px solid "+P.bd,cursor:"pointer"}} onMouseEnter={function(e){e.currentTarget.style.borderColor=P.ac;}} onMouseLeave={function(e){e.currentTarget.style.borderColor=P.bd;}}>
+        <div style={{fontSize:12,fontWeight:600,color:P.ac,marginBottom:4}}>{D.n[a]||a}</div>
+        <div style={{fontSize:10,color:P.tm}}>Click to monitor</div>
+      </div>);})}
+    </div>
+  </div>);
+}
+
+function DayDrill(props){
+  var ddSource=props.patchedDd||D.dd;var dd=ddSource[String(props.day)];if(!dd)return <div><Bk on={props.back}/><div>No data</div></div>;
+  var sDd=useSort(null);
+  var ddRaw=dd.t;var ddTrades=props.applyOverrides?props.applyOverrides(ddRaw,props.overrides,props.day):ddRaw;
+  var live=ddTrades.filter(function(t){return t.st==="live";});var pend=ddTrades.filter(function(t){return t.st==="pending";});
+  return(<div><Bk on={props.back} label="Back to calendar"/>
+    <h2 style={{margin:"0 0 10px",fontSize:18,fontWeight:700,color:P.ac}}>{(function(){var p=props.day.split("-");return parseInt(p[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p[1])]+" "+p[0];})()}</h2>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:8,marginBottom:14}}>
+      <Bx l="Total" v={ddTrades.length}/><Bx l="Live" v={live.length} c={P.gn}/><Bx l="Pending" v={pend.length} c={P.am}/>
+      <Bx l="Sum RR" v={fm(live.reduce(function(s,t){return s+t.rr;},0),2)} c={P.cy}/>
+      <Bx l="Trig Rate" v={ddTrades.length>0?fp(live.length/ddTrades.length*100):"-"} c={live.length/ddTrades.length>=0.3?P.gn:P.am}/>
+    </div>
+    {Object.keys(dd.ba).length>0?<div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>{Object.keys(dd.ba).map(function(a){var b=dd.ba[a];return(<div key={a} style={{padding:"6px 10px",background:P.cd,borderRadius:6,border:"1px solid "+P.bd,fontSize:10}}>
+      <span style={{color:P.ac,fontWeight:600}}>{D.n[a]||a}</span> <span style={{color:P.td}}>{b.n}t</span> <span style={{color:b.rr>0?P.gn:P.rd,fontWeight:600}}>{fm(b.rr,2)}</span>
+    </div>);})}</div>:null}
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+      <Th k="st" sk={sDd.sort} tog={sDd.tog}>STATUS</Th><Th k="sym" sk={sDd.sort} tog={sDd.tog}>SYM</Th><Th k="an" sk={sDd.sort} tog={sDd.tog}>ANALYST</Th><Th k="dir" sk={sDd.sort} tog={sDd.tog}>DIR</Th><Th k="pts" sk={sDd.sort} tog={sDd.tog} a="right">PTS</Th><Th k="rr" sk={sDd.sort} tog={sDd.tog} a="right">RR</Th><th style={{padding:"6px 6px",color:P.td,textAlign:"center",fontSize:10}}>FLAG</th>
+    </tr></thead><tbody>{sDd.fn(ddTrades).map(function(t,i){var isFl=props.flags.some(function(f){return f.sym===t.sym&&f.an===(t.an)&&f.dir===t.dir;});
+      return(<tr key={i} style={{borderBottom:"1px solid #3d3d3d15",opacity:t.st==="pending"&&!t.overridden?0.7:1}}>
+        <td style={{padding:4}}><Badge st={t.st} over={t.overridden}/></td>
+        <td style={{padding:4}}><Sym s={t.sym} onAsset={props.onAsset}/></td><td style={{padding:4,color:P.ac}}>{D.n[t.an]||t.an}</td>
+        <td style={{padding:4,color:t.dir==="BUY"?P.gn:P.rd,fontWeight:600}}>{t.dir}</td>
+        <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.pts>0?P.gn:t.pts<0?P.rd:P.td}}>{t.st==="live"?fm(t.pts):"-"}</td>
+        <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.rr>0?P.gn:t.rr<0?P.rd:P.td}}>{t.st==="live"?fm(t.rr,3):"-"}</td>
+        <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:t.an,sym:t.sym,dir:t.dir,d:(function(){var p2=props.day.split("-");return parseInt(p2[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p2[1])];})(),st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
+      </tr>);})}</tbody></table>
+  </div>);
+}
+
+function AnalystMonitor(props){
+  var sRc=useSort(null);
+  var sDd2=useSort(null);
+  var id=props.id;var nm=D.n[id]||id;var recSrc=props.patchedData&&props.patchedData.rec?props.patchedData.rec:D.rec;var recRaw=recSrc[id]||[];var rec=props.applyOverrides?props.applyOverrides(recRaw,props.overrides):recRaw;
+  var pd2=props.patchedData||{};
+  var days=pd2.ad&&pd2.ad[id]?pd2.ad[id]:(D.ad[id]||[]);
+  var eq=pd2.aeq&&pd2.aeq[id]?pd2.aeq[id]:(D.aeq[id]||[]);
+  var curTgr=pd2.atgr&&pd2.atgr[id]!=null?pd2.atgr[id]:(D.atgr&&D.atgr[id]?D.atgr[id]:0);
+  var sumRR=days.reduce(function(s,d){return s+d.rr;},0);
+  var totalN=days.reduce(function(s,d){return s+d.n;},0);
+  var totalW=days.reduce(function(s,d){return s+d.w;},0);
+  var wr=totalN>0?Math.round(totalW/totalN*1000)/10:0;
+  var pk=1000;var dd2=0;eq.forEach(function(e){if(e.eq>pk)pk=e.eq;var cd=(pk-e.eq)/pk*100;if(cd>dd2)dd2=cd;});
+  dd2=Math.round(dd2*100)/100;
+  var ret=eq.length>0?Math.round((eq[eq.length-1].eq/1000-1)*10000)/100:0;
+
+  if(props.monDay){
+    var ddSource2=props.patchedDd||D.dd;var dd=ddSource2[String(props.monDay)];var dayTraw=dd?dd.t.filter(function(t){return t.an===id;}):[];var dayT=props.applyOverrides?props.applyOverrides(dayTraw,props.overrides,props.monDay):dayTraw;
+    return(<div><Bk on={function(){props.setMonDay(null);}} label={"Back to "+nm}/>
+      <h3 style={{margin:"0 0 10px",fontSize:16,fontWeight:700,color:P.ac}}>{nm} - {(function(){var p3=props.monDay.split("-");return parseInt(p3[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p3[1])]+" "+p3[0];})()}</h3>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+        <Th k="st" sk={sDd2.sort} tog={sDd2.tog}>STATUS</Th><Th k="sym" sk={sDd2.sort} tog={sDd2.tog}>SYM</Th><Th k="dir" sk={sDd2.sort} tog={sDd2.tog}>DIR</Th><Th k="pts" sk={sDd2.sort} tog={sDd2.tog} a="right">PTS</Th><Th k="rr" sk={sDd2.sort} tog={sDd2.tog} a="right">RR</Th><th style={{padding:"6px 6px",color:P.td,textAlign:"center",fontSize:10}}>FLAG</th>
+      </tr></thead><tbody>{sDd2.fn(dayT).map(function(t,i){var isFl=props.flags.some(function(f){return f.sym===t.sym&&f.an===(t.an||id)&&f.dir===t.dir;});
+        return(<tr key={i} style={{borderBottom:"1px solid #3d3d3d15",opacity:t.st==="pending"&&!t.overridden?0.7:1}}>
+          <td style={{padding:4}}><Badge st={t.st} over={t.overridden}/></td><td style={{padding:4}}><Sym s={t.sym} onAsset={props.onAsset}/></td>
+          <td style={{padding:4,color:t.dir==="BUY"?P.gn:P.rd,fontWeight:600}}>{t.dir}</td>
+          <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.pts>0?P.gn:t.pts<0?P.rd:P.td}}>{t.st==="live"?fm(t.pts):"-"}</td>
+          <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.rr>0?P.gn:t.rr<0?P.rd:P.td}}>{t.st==="live"?fm(t.rr,3):"-"}</td>
+          <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:(function(){var p4=props.monDay.split("-");return parseInt(p4[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p4[1])];})(),st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
+        </tr>);})}</tbody></table>
+    </div>);
+  }
+
+  return(<div><Bk on={props.back} label="Back to monitor"/>
+    <h2 style={{margin:"0 0 14px",fontSize:20,fontWeight:700,color:P.ac}}>{nm}</h2>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:18}}>
+      <Bx l="Win Rate" v={fp(wr)} c={wr>=45?P.gn:wr>=38?P.am:P.rd}/>
+      <Bx l="Drawdown" v={fp(dd2,2)} c={dd2<10?P.gn:P.rd}/>
+      <Bx l="Return" v={(ret>0?"+":"")+fp(ret,2)} c={ret>0?P.gn:P.rd}/>
+      <Bx l="Trig Rate" v={curTgr>0?fp(curTgr):"-"} c={curTgr>=35?P.gn:P.am}/>
+      <Bx l="Sum RR" v={fm(sumRR,2)} c={sumRR>0?P.gn:P.rd}/>
+    </div>
+    <Hd t="Equity (1% risk, from 1000)"/>
+    <div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:200,marginBottom:16}}>
+      <ResponsiveContainer><AreaChart data={eq}><defs><linearGradient id={"aeq"+id} x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.cy} stopOpacity={0.3}/><stop offset="95%" stopColor={P.cy} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="d" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Day",position:"insideBottom",offset:-2,fontSize:8,fill:P.td}}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} domain={[700,1300]} label={{value:"Equity",angle:-90,position:"insideLeft",fontSize:8,fill:P.td}}/><Tooltip {...TT}/><ReferenceLine y={1000} stroke={P.td} strokeDasharray="3 3"/><Area type="monotone" dataKey="eq" name="Equity" stroke={P.cy} fill={"url(#aeq"+id+")"} strokeWidth={2} dot={false}/></AreaChart></ResponsiveContainer>
+    </div>
+    <Hd t="Daily Calendar"/>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(44px,1fr))",gap:4,marginBottom:16}}>
+      {days.map(function(d){var bg=d.rr>0?"#22c58318":d.rr<0?"#f0484818":"transparent";var dp2=d.d.split("-");var dayLbl=parseInt(dp2[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(dp2[1])];return(<div key={d.d} onClick={function(){props.setMonDay(d.d);}} style={{padding:"4px 2px",borderRadius:6,background:bg,border:"1px solid "+P.bd,cursor:"pointer",textAlign:"center"}} onMouseEnter={function(e){e.currentTarget.style.borderColor=P.ac;}} onMouseLeave={function(e){e.currentTarget.style.borderColor=P.bd;}}>
+        <div style={{fontSize:10,fontWeight:700}}>{dayLbl}</div>
+        <div style={{fontSize:9,color:P.td}}>{d.n}t/{d.w}w</div>
+        <div style={{fontSize:10,fontWeight:600,color:d.rr>0?P.gn:P.rd}}>{fm(d.rr,2)}</div>
+      </div>);})}
+    </div>
+    <Hd t="Recent Trades"/>
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+      <Th k="st" sk={sRc.sort} tog={sRc.tog}>STATUS</Th><Th k="d" sk={sRc.sort} tog={sRc.tog}>DATE</Th><Th k="sym" sk={sRc.sort} tog={sRc.tog}>SYM</Th><Th k="dir" sk={sRc.sort} tog={sRc.tog}>DIR</Th><Th k="e" sk={sRc.sort} tog={sRc.tog} a="right">ENTRY</Th><Th k="ex" sk={sRc.sort} tog={sRc.tog} a="right">EXIT</Th><Th k="rr" sk={sRc.sort} tog={sRc.tog} a="right">RR</Th><th style={{padding:"6px 6px",color:P.td,textAlign:"center",fontSize:10}}>FLAG</th>
+    </tr></thead><tbody>{sRc.fn(rec).map(function(t,i){var isFl=props.flags.some(function(f){return f.sym===t.sym&&f.an===(t.an||id)&&f.dir===t.dir;});
+      return(<tr key={i} style={{borderBottom:"1px solid #3d3d3d15",opacity:t.st==="pending"&&!t.overridden?0.7:1}}>
+        <td style={{padding:4}}><Badge st={t.st} over={t.overridden}/></td><td style={{padding:"4px 6px",color:P.td}}>{t.d}</td>
+        <td style={{padding:"4px 6px"}}><Sym s={t.sym} onAsset={props.onAsset}/></td>
+        <td style={{padding:"4px 6px",color:t.dir==="BUY"?P.gn:P.rd,fontWeight:600}}>{t.dir}</td>
+        <td style={{padding:"4px 6px",textAlign:"right"}}>{t.e}</td><td style={{padding:"4px 6px",textAlign:"right"}}>{t.st==="live"?t.ex:"-"}</td>
+        <td style={{padding:"4px 6px",textAlign:"right",fontWeight:600,color:t.rr>0?P.gn:t.rr<0?P.rd:P.td}}>{t.st==="live"?fm(t.rr,3):"-"}</td>
+        <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:t.d,st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
+      </tr>);})}</tbody></table>
+  </div>);
+}
+
+function Schedule(props){
+  var cov=D.cov;var realloc=D.realloc||{};
+  var AC={IAN:"#FF8F14",KG:"#22c583",MAG:"#4A90D9",MOH:"#b07ce8",TIV:"#e74c3c"};
+  var[selMonth,setSelMonth]=useState(2);var[selYear,setSelYear]=useState(2026);
+  var daysInMonth=new Date(selYear,selMonth,0).getDate();
+  var firstDow=new Date(selYear,selMonth-1,1).getDay();
+  var dayNames=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  var calDays=[];for(var i=0;i<firstDow;i++)calDays.push(null);for(var d2=1;d2<=daysInMonth;d2++)calDays.push(d2);
+
+  function isOff(analyst,day){
+    if(!day)return false;
+    var ds=selYear+"-"+(selMonth<10?"0":"")+selMonth+"-"+(day<10?"0":"")+day;
+    return(props.holidays||[]).some(function(h){return h.analyst===analyst&&ds>=h.from&&ds<=h.to;});
+  }
+  function offOn(day){
+    if(!day)return[];
+    return ACTIVE.filter(function(a){return isOff(a,day);});
+  }
+
+  var activeRealloc={};
+  ACTIVE.forEach(function(a){activeRealloc[a]=[];});
+  (props.holidays||[]).forEach(function(h){
+    var ra=realloc[h.analyst];if(!ra)return;
+    Object.keys(ra).forEach(function(to){
+      ra[to].forEach(function(sym){
+        if(activeRealloc[to]&&activeRealloc[to].indexOf(sym)<0)activeRealloc[to].push(sym);
+      });
+    });
+  });
+
+  var today=new Date().toISOString().slice(0,10);
+  var offToday=(props.holidays||[]).filter(function(h){return today>=h.from&&today<=h.to;});
+  return(<div>
+    <Hd t="Analyst Coverage & Schedule"/>
+    {offToday.length>0?<div style={{background:"#e74c3c15",border:"1px solid #e74c3c60",borderRadius:8,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
+      <span style={{fontSize:18}}>{"\u26A0"}</span>
+      <div><div style={{fontSize:12,fontWeight:700,color:"#e74c3c",marginBottom:2}}>Analyst{offToday.length>1?"s":""} Currently Off</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{offToday.map(function(h,i){return <span key={i} style={{fontSize:11,color:AC[h.analyst]||P.ac,fontWeight:600}}>{D.n[h.analyst]||h.analyst} ({h.from} to {h.to})</span>;})}</div>
+      </div>
+    </div>:null}
+    <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+      {ACTIVE.map(function(a){return <div key={a} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:P.cd,borderRadius:6,border:"2px solid "+AC[a]}}><div style={{width:10,height:10,borderRadius:"50%",background:AC[a]}}/><span style={{fontSize:11,fontWeight:600,color:AC[a]}}>{D.n[a]||a}</span></div>;})}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:24}}>
+      {ACTIVE.map(function(a){var extra=activeRealloc[a]||[];return(<div key={a} style={{background:P.cd,borderRadius:10,padding:14,border:"2px solid "+AC[a]}}>
+        <div style={{fontSize:13,fontWeight:600,color:AC[a],marginBottom:8}}>{D.n[a]||a}</div>
+        <div style={{fontSize:10,color:P.td,marginBottom:4}}>Primary Coverage</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:extra.length>0?10:0}}>{(cov[a]||[]).map(function(s){return <span key={s} style={{padding:"2px 6px",background:P.bg,borderRadius:4,fontSize:10,color:P.tm,border:"1px solid "+P.bd}}>{s}</span>;})}</div>
+        {extra.length>0?<div><div style={{fontSize:10,color:P.am,marginBottom:4,fontWeight:600}}>+ Holiday Cover</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{extra.map(function(s){return <span key={s} style={{padding:"2px 6px",background:P.am+"15",borderRadius:4,fontSize:10,color:P.am,border:"1px solid "+P.am+"40"}}>{s}</span>;})}</div>
+        </div>:null}
+      </div>);})}
+    </div>
+    <Hd t="Calendar"/>
+    <div style={{background:P.cd,borderRadius:12,padding:16,border:"1px solid "+P.bd,marginBottom:20}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:2}}>
+        {dayNames.map(function(dn){return <div key={dn} style={{textAlign:"center",fontSize:10,color:P.td,padding:4,fontWeight:600}}>{dn}</div>;})}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+        {calDays.map(function(day,i){
+          if(!day)return <div key={"e"+i}/>;
+          var off=offOn(day);var dow=new Date(selYear,selMonth-1,day).getDay();var isWE=dow===0||dow===6;
+          return(<div key={day} style={{padding:"6px 2px",borderRadius:6,background:isWE?"#1a1a1a":off.length===1?(AC[off[0]]||P.am)+"18":off.length>1?"#FF8F1418":"transparent",border:"1px solid "+P.bd,textAlign:"center",minHeight:36}}>
+            <div style={{fontSize:12,fontWeight:600,color:isWE?P.td:P.tx}}>{day}</div>
+            {off.length>0?<div style={{display:"flex",gap:2,justifyContent:"center",marginTop:2}}>{off.map(function(a){return <div key={a} style={{width:8,height:8,borderRadius:"50%",background:AC[a]}} title={D.n[a]||a}/>;})}</div>:null}
+          </div>);
+        })}
+      </div>
+    </div>
+    <Hd t="Book Holiday"/>
+    <div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,marginBottom:16}}>
+      <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+        <select id="hol-analyst" style={{padding:"6px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit"}}>
+          {ACTIVE.map(function(a){return <option key={a} value={a}>{D.n[a]||a}</option>;})}
+        </select>
+        <input type="date" id="hol-from" style={{padding:"6px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit"}}/>
+        <span style={{color:P.td,fontSize:11}}>to</span>
+        <input type="date" id="hol-to" style={{padding:"6px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit"}}/>
+        <button onClick={function(){var a=document.getElementById("hol-analyst").value;var f=document.getElementById("hol-from").value;var t=document.getElementById("hol-to").value;if(a&&f&&t){props.setHolidays(function(p){return p.concat([{analyst:a,from:f,to:t}]);});}}} style={{padding:"6px 14px",background:P.ac,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Book</button>
+      </div>
+    </div>
+    {(props.holidays||[]).length>0?<div><Hd t="Booked Absences"/>
+      {props.holidays.map(function(h,i){return(<div key={i} style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",marginBottom:4,borderRadius:8,background:P.cd,border:"1px solid "+P.bd,fontSize:11}}>
+        <div style={{width:10,height:10,borderRadius:"50%",background:AC[h.analyst]||P.ac}}/>
+        <span style={{color:AC[h.analyst]||P.ac,fontWeight:600}}>{D.n[h.analyst]||h.analyst}</span>
+        <span style={{color:P.tm}}>{h.from} to {h.to}</span>
+        <div style={{marginLeft:"auto",fontSize:9,color:P.td}}>Cover: {Object.keys(realloc[h.analyst]||{}).map(function(to){return(D.n[to]||to)+": "+(realloc[h.analyst][to]||[]).join(", ");}).join(" | ")}</div>
+        <button onClick={function(){props.setHolidays(function(p){return p.filter(function(_,j){return j!==i;});});}} style={{padding:"2px 8px",background:"transparent",border:"1px solid "+P.rd,color:P.rd,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Remove</button>
+      </div>);})}
+      <div style={{marginTop:14}}><Hd t="Reallocation When Off"/>
+        {(props.holidays||[]).map(function(h){var ra=realloc[h.analyst];if(!ra)return null;
+          return(<div key={h.analyst+h.from} style={{marginBottom:12,background:P.cd,borderRadius:8,padding:12,border:"1px solid "+P.bd}}>
+            <div style={{fontSize:12,fontWeight:600,marginBottom:8}}><span style={{color:AC[h.analyst]||P.ac}}>{D.n[h.analyst]||h.analyst}</span> <span style={{color:P.td}}>off {h.from} to {h.to}</span></div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+              {Object.keys(ra).map(function(to){return(<div key={to} style={{padding:"6px 8px",borderRadius:6,border:"1px solid "+(AC[to]||P.bd)}}>
+                <div style={{fontSize:10,color:AC[to]||P.ac,fontWeight:600,marginBottom:4}}>{D.n[to]||to} covers:</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:3}}>{ra[to].map(function(sym){return <span key={sym} style={{padding:"1px 5px",background:P.bg,borderRadius:3,fontSize:9,color:P.tm}}>{sym}</span>;})}</div>
+              </div>);})}
+            </div>
+          </div>);
+        })}
+      </div>
+    </div>:null}
+  </div>);
+}
+
+function AssetView(props){
+  var sym=props.sym;var ss=D.ss[sym];var sst=D.sst[sym]||{};
+  if(!ss) return <div><Bk on={props.back} label="Back"/><div style={{color:P.tm}}>No detailed data for {sym}. (Top 35 symbols only)</div></div>;
+  var tgr=sst.tgr||0;var cat=sst.cat||"";
+  return(<div>
+    <Bk on={props.back} label="Back"/>
+    <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+      <h2 style={{margin:0,fontSize:20,fontWeight:700,color:P.ac}}>{sym}</h2>
+      {cat?<span style={{fontSize:10,padding:"2px 8px",borderRadius:4,background:(CC[cat]||P.td)+"20",color:CC[cat]||P.td}}>{cat}</span>:null}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:8,marginBottom:18}}>
+      <Bx l="Trades" v={fi(ss.n)}/><Bx l="Wins" v={fi(ss.w)}/><Bx l="Win Rate" v={fp(ss.wr)} c={ss.wr>=46?P.gn:P.am}/><Bx l="Sum RR" v={fm(ss.rr)} c={ss.rr>0?P.gn:P.rd}/><Bx l="Trig Rate" v={tgr>0?fp(tgr):"-"} c={tgr>35?P.gn:P.am}/>
+    </div>
+    <Hd t="Equity Curve (1% risk)"/>
+    <div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180,marginBottom:18}}>
+      <ResponsiveContainer><AreaChart data={ss.eq}><defs><linearGradient id="sEq" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={ss.rr>0?P.gn:P.rd} stopOpacity={0.3}/><stop offset="95%" stopColor={ss.rr>0?P.gn:P.rd} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="d" tick={{fontSize:8,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Date",position:"insideBottom",offset:-2,fontSize:8,fill:P.td}}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Equity",angle:-90,position:"insideLeft",fontSize:8,fill:P.td}}/><Tooltip {...TT}/><Area type="monotone" dataKey="eq" stroke={ss.rr>0?P.gn:P.rd} fill="url(#sEq)" strokeWidth={2} dot={false}/></AreaChart></ResponsiveContainer>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+      <div><Hd t="By Analyst"/>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+          <th style={{padding:"6px 6px",textAlign:"left",color:P.td,fontSize:10}}>ANALYST</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>TRADES</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>WIN%</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>RR</th>
+        </tr></thead><tbody>{(ss.ba||[]).map(function(b){return(<tr key={b.a} style={{borderBottom:"1px solid #3d3d3d15"}}>
+          <td style={{padding:"5px 6px",fontWeight:600,color:isActive(b.a)?P.ac:P.td}}>{D.n[b.a]||b.a}</td>
+          <td style={{padding:5,textAlign:"right"}}>{b.n}</td><td style={{padding:5,textAlign:"right",color:b.wr>=46?P.gn:P.am}}>{fp(b.wr)}</td>
+          <td style={{padding:5,textAlign:"right",fontWeight:700,color:b.rr>0?P.gn:P.rd}}>{fm(b.rr)}</td>
+        </tr>);})}</tbody></table>
+      </div>
+      <div><Hd t="By Year"/>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
+          <th style={{padding:"6px 6px",textAlign:"left",color:P.td,fontSize:10}}>YEAR</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>TRADES</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>WIN%</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>RR</th>
+        </tr></thead><tbody>{(ss.yr||[]).map(function(y){return(<tr key={y.y} style={{borderBottom:"1px solid #3d3d3d15"}}>
+          <td style={{padding:"5px 6px",fontWeight:600,color:P.ac}}>{y.y}</td>
+          <td style={{padding:5,textAlign:"right"}}>{y.n}</td><td style={{padding:5,textAlign:"right",color:y.wr>=46?P.gn:P.am}}>{fp(y.wr)}</td>
+          <td style={{padding:5,textAlign:"right",fontWeight:700,color:y.rr>0?P.gn:P.rd}}>{fm(y.rr)}</td>
+        </tr>);})}</tbody></table>
+      </div>
+    </div>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(RootApp));
+</script>
+</body>
+</html>
