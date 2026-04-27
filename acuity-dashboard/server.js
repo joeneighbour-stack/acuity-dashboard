@@ -395,7 +395,8 @@ function filterForAnalyst(D, aid) {
   if (F.kh) { const my = F.kh[aid] || []; F.kh = {}; F.kh[aid] = my; }
   if (F.as) { const my = F.as[aid] || {}; F.as = {}; F.as[aid] = my; }
   if (F.atgr) { const my = F.atgr[aid] || 0; F.atgr = {}; F.atgr[aid] = my; }
-  if (F.cov) { const my = F.cov[aid] || []; F.cov = {}; F.cov[aid] = my; }
+  // Keep cov (coverage) unfiltered - Schedule needs all analysts' markets
+  // if (F.cov) - deliberately NOT filtering
   if (F.a) F.a = F.a.filter(a => a.id === aid);
   F._role = 'analyst';
   F._analyst_id = aid;
