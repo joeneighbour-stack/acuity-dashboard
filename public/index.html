@@ -45,16 +45,21 @@ function RootApp() {
         return r.json();
       }),
       fetch('/api/flags').then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; }),
-      fetch('/api/overrides').then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; })
+      fetch('/api/overrides').then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; }),
+      fetch('/api/holidays').then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; })
     ]).then(function(results) {
       var meData = results[0];
       var dashData = results[1];
       var flagsData = results[2];
       var overridesData = results[3];
+      var holidaysData = results[4];
       D = dashData;
       D._initialFlags = flagsData;
       D._initialOverrides = overridesData.map(function(o) {
         return { an: o.an, sym: o.sym, dir: o.dir, d: o.d, entry: o.entry, exit: o.exit_val, rr: o.rr, id: o.id };
+      });
+      D._initialHolidays = holidaysData.map(function(h) {
+        return { id: h.id, analyst: h.analyst, from: h.start, to: h.end, realloc: h.realloc || {} };
       });
       if (meData.user) {
         setUser(meData.user);
@@ -127,7 +132,7 @@ function App(props){
   var s=useState;
   var[tab,setTab]=s(0);var[selA,setSelA]=s(USER_ANALYST_ID||null);var[selMonth,setSelMonth]=s(null);var[selYr,setSelYr]=s(null);
   var[monA,setMonA]=s(USER_ANALYST_ID||null);var[monDay,setMonDay]=s(null);var[flags,setFlags]=s(D._initialFlags||[]);var[overrides,setOverrides]=s(D._initialOverrides||[]);
-  var[holidays,setHolidays]=s([]);var[assetView,setAssetView]=s(null);var[syncing,setSyncing]=s(false);
+  var[holidays,setHolidays]=s(D._initialHolidays||[]);var[assetView,setAssetView]=s(null);var[syncing,setSyncing]=s(false);
   var[flagModal,setFlagModal]=s(null);var[overModal,setOverModal]=s(null);
   function applyOverrides(trades,ov,dayCtx){
     if(!ov||ov.length===0)return trades;
@@ -835,7 +840,7 @@ function Schedule(props){
         <input type="date" id="hol-from" style={{padding:"6px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit"}}/>
         <span style={{color:P.td,fontSize:11}}>to</span>
         <input type="date" id="hol-to" style={{padding:"6px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit"}}/>
-        <button onClick={function(){var a=document.getElementById("hol-analyst").value;var f=document.getElementById("hol-from").value;var t=document.getElementById("hol-to").value;if(a&&f&&t){props.setHolidays(function(p){return p.concat([{analyst:a,from:f,to:t}]);});}}} style={{padding:"6px 14px",background:P.ac,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Book</button>
+        <button onClick={function(){var a=document.getElementById("hol-analyst").value;var f=document.getElementById("hol-from").value;var t=document.getElementById("hol-to").value;if(a&&f&&t){fetch("/api/holidays",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({analyst:a,start:f,end:t,realloc:{}})}).then(function(){return fetch("/api/holidays");}).then(function(r){return r.json();}).then(function(hols){props.setHolidays(hols.map(function(h){return{id:h.id,analyst:h.analyst,from:h.start,to:h.end,realloc:h.realloc||{}};}));}).catch(function(){props.setHolidays(function(p){return p.concat([{analyst:a,from:f,to:t}]);});});}}} style={{padding:"6px 14px",background:P.ac,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Book</button>
       </div>
     </div>
     {(props.holidays||[]).length>0?<div><Hd t="Booked Absences"/>
@@ -844,7 +849,7 @@ function Schedule(props){
         <span style={{color:AC[h.analyst]||P.ac,fontWeight:600}}>{D.n[h.analyst]||h.analyst}</span>
         <span style={{color:P.tm}}>{h.from} to {h.to}</span>
         <div style={{marginLeft:"auto",fontSize:9,color:P.td}}>Cover: {Object.keys(realloc[h.analyst]||{}).map(function(to){return(D.n[to]||to)+": "+(realloc[h.analyst][to]||[]).join(", ");}).join(" | ")}</div>
-        <button onClick={function(){props.setHolidays(function(p){return p.filter(function(_,j){return j!==i;});});}} style={{padding:"2px 8px",background:"transparent",border:"1px solid "+P.rd,color:P.rd,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Remove</button>
+        <button onClick={function(){var hid=h.id;if(hid){fetch("/api/holidays/"+hid,{method:"DELETE"}).then(function(){return fetch("/api/holidays");}).then(function(r){return r.json();}).then(function(hols){props.setHolidays(hols.map(function(h2){return{id:h2.id,analyst:h2.analyst,from:h2.start,to:h2.end,realloc:h2.realloc||{}};}));});}else{props.setHolidays(function(p){return p.filter(function(_,j){return j!==i;});});}}} style={{padding:"2px 8px",background:"transparent",border:"1px solid "+P.rd,color:P.rd,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Remove</button>
       </div>);})}
       <div style={{marginTop:14}}><Hd t="Reallocation When Off"/>
         {(props.holidays||[]).map(function(h){var ra=realloc[h.analyst];if(!ra)return null;

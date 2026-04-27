@@ -56,6 +56,17 @@ async function dbInit() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS holidays (
+      id SERIAL PRIMARY KEY,
+      analyst TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      realloc TEXT DEFAULT '{}',
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 }
 
 async function dbAll(sql, params) { const r = await pool.query(sql, params); return r.rows; }
@@ -198,6 +209,41 @@ app.delete('/api/overrides/:id', requireAdmin, async (req, res) => {
   syncData(allOverrides).catch(err => console.error('[API-SYNC] Post-delete-override sync error:', err));
 });
 
+// ===== HOLIDAYS =====
+app.get('/api/holidays', requireAuth, async (req, res) => {
+  const rows = await dbAll('SELECT * FROM holidays ORDER BY start_date DESC');
+  const holidays = rows.map(r => ({
+    id: r.id,
+    analyst: r.analyst,
+    start: r.start_date,
+    end: r.end_date,
+    realloc: JSON.parse(r.realloc || '{}'),
+    created_by: r.created_by
+  }));
+  res.json(holidays);
+});
+
+app.post('/api/holidays', requireAuth, async (req, res) => {
+  const { analyst, start, end, realloc } = req.body;
+  if (!analyst || !start || !end) return res.status(400).json({ error: 'analyst, start, end required' });
+  const createdBy = req.session.user.display_name || req.session.user.username;
+  await dbRun('INSERT INTO holidays (analyst, start_date, end_date, realloc, created_by) VALUES ($1,$2,$3,$4,$5)',
+    [analyst, start, end, JSON.stringify(realloc || {}), createdBy]);
+  res.json({ success: true });
+});
+
+app.put('/api/holidays/:id', requireAuth, async (req, res) => {
+  const { analyst, start, end, realloc } = req.body;
+  await dbRun('UPDATE holidays SET analyst=$1, start_date=$2, end_date=$3, realloc=$4 WHERE id=$5',
+    [analyst, start, end, JSON.stringify(realloc || {}), req.params.id]);
+  res.json({ success: true });
+});
+
+app.delete('/api/holidays/:id', requireAuth, async (req, res) => {
+  await dbRun('DELETE FROM holidays WHERE id = $1', [req.params.id]);
+  res.json({ success: true });
+});
+
 // ===== ANALYST DATA FILTERING =====
 function filterForAnalyst(D, aid) {
   const F = JSON.parse(JSON.stringify(D));
@@ -209,32 +255,139 @@ function filterForAnalyst(D, aid) {
       if (myAmd[k]) {
         F.md[k] = myAmd[k];
       } else {
-        // No data for this analyst in this month - show empty
         F.md[k] = { lb: [], b5: [], w5: [], eq: [], tgr: 0 };
       }
     });
   } else {
-    // Fallback: just hide analyst names
     Object.keys(F.md).forEach(k => { if (F.md[k].lb) F.md[k].lb = []; });
   }
-  delete F.amd; // Don't send all analysts' data to client
+  delete F.amd;
 
-  // Replace mpnl with analyst's own monthly data so Overview drill-down shows their stats
+  // Replace mpnl with analyst's own monthly data
+  let myMpnl = [];
   if (F.am && F.am[aid]) {
     const myAm = F.am[aid];
-    F.mpnl = myAm.map(m => ({
+    myMpnl = myAm.map(m => ({
       m: '20' + m.m.substring(0, 2) + '-' + m.m.substring(3, 5),
-      mu: m.mu,
-      ret: m.ret,
-      n: m.n,
-      w: m.w,
-      wr: m.wr,
-      dd: m.dd,
-      rr: m.rr,
-      tgr: m.tgr,
-      y: '20' + m.m.substring(0, 2)
+      mu: m.mu, ret: m.ret, n: m.n, w: m.w, wr: m.wr,
+      dd: m.dd, rr: m.rr, tgr: m.tgr, y: '20' + m.m.substring(0, 2)
     }));
+    F.mpnl = myMpnl;
   }
+
+  // Rebuild equity curve from analyst's mpnl
+  if (myMpnl.length > 0) {
+    let eqF = 1000, eqS = 1000, peakF = 1000, peakS = 1000, maxDDF = 0, maxDDS = 0;
+    F.eq = [];
+    myMpnl.forEach(p => {
+      eqF = Math.round((eqF + p.ret * 10) * 100) / 100;
+      eqS = Math.round(eqS * (1 + p.ret / 100) * 100) / 100;
+      if (eqF > peakF) peakF = eqF;
+      if (eqS > peakS) peakS = eqS;
+      const ddF = peakF > 0 ? (peakF - eqF) / peakF * 100 : 0;
+      const ddS = peakS > 0 ? (peakS - eqS) / peakS * 100 : 0;
+      if (ddF > maxDDF) maxDDF = ddF;
+      if (ddS > maxDDS) maxDDS = ddS;
+      F.eq.push({ d: p.m, f: Math.round(eqF), s: Math.round(eqS) });
+    });
+
+    // Rebuild overall stats
+    const totalN = myMpnl.reduce((s, p) => s + p.n, 0);
+    const totalW = myMpnl.reduce((s, p) => s + p.w, 0);
+    const totalRR = Math.round(myMpnl.reduce((s, p) => s + p.rr, 0) * 10) / 10;
+    F.o = {
+      trades: totalN, wins: totalW, losses: totalN - totalW,
+      wr: totalN > 0 ? Math.round(totalW / totalN * 1000) / 10 : 0,
+      rr: totalRR,
+      fixedReturn: Math.round((eqF / 10 - 100) * 100) / 100,
+      sizedReturn: Math.round((eqS / 10 - 100) * 100) / 100,
+      fixedDD: Math.round(maxDDF * 100) / 100,
+      sizedDD: Math.round(maxDDS * 100) / 100,
+      from: myMpnl[0].mu, to: myMpnl[myMpnl.length - 1].mu
+    };
+
+    // Rebuild year summary
+    const yrMap = {};
+    myMpnl.forEach(p => {
+      if (!yrMap[p.y]) yrMap[p.y] = { n: 0, w: 0, rr: 0 };
+      yrMap[p.y].n += p.n; yrMap[p.y].w += p.w; yrMap[p.y].rr += p.rr;
+    });
+    F.yr = Object.entries(yrMap).sort().map(([y, d]) => ({
+      y, n: d.n, w: d.w, wr: d.n > 0 ? Math.round(d.w / d.n * 1000) / 10 : 0,
+      rr: Math.round(d.rr * 10) / 10
+    }));
+
+    // Rebuild monthly seasonals from analyst's months
+    const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    F.sm = MN.map(n => ({ n, v: 0 }));
+    myMpnl.forEach(p => {
+      const mi = parseInt(p.m.slice(5)) - 1;
+      if (mi >= 0 && mi < 12) F.sm[mi].v = Math.round((F.sm[mi].v + p.rr) * 10) / 10;
+    });
+  }
+
+  // Rebuild day-of-week from analyst's trades in dd
+  if (F.dd) {
+    F.sd = [{ n: 'Mon', v: 0 }, { n: 'Tue', v: 0 }, { n: 'Wed', v: 0 }, { n: 'Thu', v: 0 }, { n: 'Fri', v: 0 }];
+    Object.entries(F.dd).forEach(([dateStr, dayData]) => {
+      if (dayData.t) {
+        const dow = new Date(dateStr + 'T12:00:00Z').getUTCDay();
+        dayData.t.forEach(t => {
+          if (t.an === aid && t.st === 'live' && dow >= 1 && dow <= 5) {
+            F.sd[dow - 1].v = Math.round((F.sd[dow - 1].v + t.rr) * 10) / 10;
+          }
+        });
+      }
+    });
+  }
+
+  // Filter DD (day drill) to only this analyst's trades
+  if (F.dd) {
+    Object.keys(F.dd).forEach(k => {
+      const dayData = F.dd[k];
+      if (dayData.t) {
+        dayData.t = dayData.t.filter(t => t.an === aid);
+        // Recalculate ba for this analyst only
+        const live = dayData.t.filter(t => t.st === 'live');
+        dayData.ba = {};
+        if (live.length > 0) {
+          dayData.ba[aid] = {
+            n: live.length,
+            w: live.filter(t => t.rr > 0).length,
+            rr: Math.round(live.reduce((s, t) => s + t.rr, 0) * 100) / 100
+          };
+        }
+        dayData.nl = live.length;
+        dayData.np = dayData.t.length - live.length;
+      }
+    });
+  }
+
+  // Filter DP (daily performance) to analyst's trades
+  if (F.dp) {
+    // Rebuild dp from filtered dd
+    F.dp = F.dp.map(day => {
+      const ddDay = F.dd[day.d];
+      if (!ddDay) return day;
+      const live = (ddDay.t || []).filter(t => t.st === 'live');
+      return {
+        d: day.d,
+        n: live.length,
+        w: live.filter(t => t.rr > 0).length,
+        rr: Math.round(live.reduce((s, t) => s + t.rr, 0) * 100) / 100,
+        tgr: ddDay.t.length > 0 ? Math.round(live.length / ddDay.t.length * 1000) / 10 : 0,
+        nl: live.length,
+        np: ddDay.t.length - live.length
+      };
+    });
+  }
+
+  // Filter SR (symbol rankings) to analyst's trades only
+  // We can't easily rebuild this without trade-level data per symbol per year
+  // So just keep the global rankings for now - they show which symbols performed best overall
+
+  // Filter MDE to analyst's data (rebuild from amd equity if available)
+  // Keep global mde for now as it's chart display only
 
   if (F.am) { const my = F.am[aid] || []; F.am = {}; F.am[aid] = my; }
   if (F.aeq) { const my = F.aeq[aid] || []; F.aeq = {}; F.aeq[aid] = my; }
