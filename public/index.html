@@ -365,25 +365,13 @@ function AnalystList(props){
   var raw=useMemo(function(){
     if(period==="all") return D.a.slice();var results=[];
     D.a.forEach(function(a){var mos=(D.am[a.id]||[]).slice();
-      if(pd5.ad&&pd5.ad[a.id]&&mos.length>0){
-        var last=mos[mos.length-1];var days5=pd5.ad[a.id]||[];
-        if(days5.length>0){
-          var tn5=0,tw5=0,trr5=0;days5.forEach(function(dd5){tn5+=dd5.n;tw5+=dd5.w;trr5+=dd5.rr;});
-          var wp5=tn5>0?Math.round(tw5/tn5*1000)/10:0;
-          var eq5=pd5.aeq&&pd5.aeq[a.id]?pd5.aeq[a.id]:[];
-          var pk5=1000;var mdd5=0;eq5.forEach(function(e){if(e.eq>pk5)pk5=e.eq;var cd5=(pk5-e.eq)/pk5*100;if(cd5>mdd5)mdd5=cd5;});
-          var ret5=eq5.length>0?Math.round((eq5[eq5.length-1].eq/1000-1)*10000)/100:0;
-          var tgr5=pd5.atgr&&pd5.atgr[a.id]!=null?pd5.atgr[a.id]:last.tgr;
-          mos[mos.length-1]=Object.assign({},last,{n:tn5,w:tw5,wr:wp5,ret:ret5,dd:Math.round(mdd5*100)/100,tgr:tgr5,rr:Math.round(trr5*10)/10});
-        }
-      }
       var filtered=[];
       if(period.length===4){filtered=mos.filter(function(m){return "20"+m.m.slice(0,2)===period;});}
       else if(period.indexOf("-Q")>-1){var yr=period.slice(0,4);var q=parseInt(period.slice(6));var qm=[[1,2,3],[4,5,6],[7,8,9],[10,11,12]][q-1];filtered=mos.filter(function(m){return "20"+m.m.slice(0,2)===yr&&qm.indexOf(parseInt(m.m.slice(3,5)))>=0;});}
       else if(period.length>=6){var yrm=period.slice(0,4);var mmm=period.slice(5,7);filtered=mos.filter(function(m){return "20"+m.m.slice(0,2)===yrm&&m.m.slice(3,5)===mmm;});}
       if(filtered.length>0){var tn=0,tw=0,trr=0;filtered.forEach(function(m){tn+=m.n;tw+=m.w;trr+=m.rr;});results.push({id:a.id,tr:tn,w:tw,wr:Math.round(tw/tn*1000)/10,sr:Math.round(trr*10)/10,tgr:a.tgr,rr:a.rr,ts:a.ts});}
     });return results;
-  },[period,pd5]);
+  },[period]);
   return(<div><Hd t="Analyst Leaderboard"/>
     <div style={{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
       <span style={{fontSize:10,color:P.td,marginRight:4}}>PERIOD:</span>
@@ -505,23 +493,8 @@ function KPIDash(props){
   var mpnl2=props.patchedData?props.patchedData.mpnl:D.mpnl;
   var cur=mpnl2[mpnl2.length-1];var ck=cur?cur.m.slice(2):"";var ids=ACTIVE;
   var cKPI=[];
-  if(props.patchedData&&props.patchedData.ad){
-    var pd3=props.patchedData;
-    ids.forEach(function(a){
-      var days=pd3.ad[a]||[];if(days.length===0)return;
-      var tn=0;var tw=0;var trr=0;
-      days.forEach(function(dd3){tn+=dd3.n;tw+=dd3.w;trr+=dd3.rr;});
-      var wp=tn>0?Math.round(tw/tn*1000)/10:0;
-      var eq2=pd3.aeq&&pd3.aeq[a]?pd3.aeq[a]:[];
-      var pk2=1000;var mdd2=0;eq2.forEach(function(e){if(e.eq>pk2)pk2=e.eq;var cd2=(pk2-e.eq)/pk2*100;if(cd2>mdd2)mdd2=cd2;});
-      var ret3=eq2.length>0?Math.round((eq2[eq2.length-1].eq/1000-1)*10000)/100:0;
-      var tgr2=pd3.atgr&&pd3.atgr[a]?pd3.atgr[a]:0;
-      var l2=tn<10?"grey":wp>=45&&ret3>0&&mdd2<10&&(tgr2>=35||tgr2===0)?"green":wp<35||ret3<-5||mdd2>=10?"red":"amber";
-      cKPI.push({a:a,mu:cur?cur.mu:"",n:tn,w:tw,wr:wp,ret:ret3,dd:Math.round(mdd2*100)/100,tgr:tgr2,rr:Math.round(trr*10)/10,l:l2});
-    });
-  }else{
-    ids.forEach(function(a){(D.am[a]||[]).forEach(function(m){if(m.m===ck){cKPI.push({a:a,mu:m.mu,n:m.n,w:m.w,wr:m.wr,ret:m.ret,dd:m.dd,tgr:m.tgr,rr:m.rr,l:m.l});}});});
-  }
+  // Always use D.am for current month - this matches the Overview month drill data
+  ids.forEach(function(a){(D.am[a]||[]).forEach(function(m){if(m.m===ck){cKPI.push({a:a,mu:m.mu,n:m.n,w:m.w,wr:m.wr,ret:m.ret,dd:m.dd,tgr:m.tgr,rr:m.rr,l:m.l});}});});
   var kh=D.kh||{};
   var kpiMetrics=["wr","ret","dd","tgr"];
   var kpiLabels={wr:"Win Rate",ret:"Return",dd:"Drawdown",tgr:"Trig Rate"};
