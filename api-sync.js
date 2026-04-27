@@ -665,7 +665,30 @@ function buildDashboardData(trades, baseData) {
         eqPoints.push({ d: dayNum, eq: Math.round(eqA2) });
       }
 
-      amd[a][m] = { lb, b5, w5, eq: eqPoints, tgr: tgrV };
+      // Category breakdown for this analyst
+      const catMapA = {};
+      myAll.forEach(t => {
+        if (!catMapA[t.cat]) catMapA[t.cat] = { all: [], trig: [] };
+        catMapA[t.cat].all.push(t);
+        if (t.triggered) catMapA[t.cat].trig.push(t);
+      });
+      const cats = Object.entries(catMapA).map(([c, d]) => {
+        const cn = d.trig.length;
+        const cw = d.trig.filter(t => t.rr > 0).length;
+        const crr = round1(d.trig.reduce((s, t) => s + t.rr, 0));
+        let ceq = 1000, cpk = 1000, cmdd = 0;
+        const cdRR = {};
+        for (const t of d.trig) { const dk = t.date.substring(0, 10); cdRR[dk] = (cdRR[dk] || 0) + t.rr; }
+        for (const dk of Object.keys(cdRR).sort()) { ceq += cdRR[dk] * 10; if (ceq > cpk) cpk = ceq; const cdd = cpk > 0 ? (cpk - ceq) / cpk * 100 : 0; if (cdd > cmdd) cmdd = cdd; }
+        return {
+          c, n: cn, w: cw, wr: cn > 0 ? round1(cw / cn * 100) : 0,
+          ret: round2(ceq / 10 - 100), dd: round2(cmdd),
+          tgr: parseInt(m.substring(0,4)) >= 2023 ? (d.all.length > 0 ? round1(d.all.filter(t => t.rawTriggered).length / d.all.length * 100) : 0) : 0,
+          rr: crr
+        };
+      });
+
+      amd[a][m] = { lb, b5, w5, eq: eqPoints, tgr: tgrV, cats };
     }
   });
 

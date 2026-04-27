@@ -382,12 +382,9 @@ function filterForAnalyst(D, aid) {
     });
   }
 
-  // Filter SR (symbol rankings) to analyst's trades only
-  // We can't easily rebuild this without trade-level data per symbol per year
-  // So just keep the global rankings for now - they show which symbols performed best overall
-
-  // Filter MDE to analyst's data (rebuild from amd equity if available)
-  // Keep global mde for now as it's chart display only
+  // Clear global mde and mdc so MonthDrill falls back to analyst-specific md.eq from amd
+  F.mde = {};
+  F.mdc = {};
 
   if (F.am) { const my = F.am[aid] || []; F.am = {}; F.am[aid] = my; }
   if (F.aeq) { const my = F.aeq[aid] || []; F.aeq = {}; F.aeq[aid] = my; }
@@ -395,7 +392,8 @@ function filterForAnalyst(D, aid) {
   if (F.kh) { const my = F.kh[aid] || []; F.kh = {}; F.kh[aid] = my; }
   if (F.as) { const my = F.as[aid] || {}; F.as = {}; F.as[aid] = my; }
   if (F.atgr) { const my = F.atgr[aid] || 0; F.atgr = {}; F.atgr[aid] = my; }
-  if (F.cov) { const my = F.cov[aid] || []; F.cov = {}; F.cov[aid] = my; }
+  // Keep cov (coverage) unfiltered - Schedule needs all analysts' markets
+  // if (F.cov) - deliberately NOT filtering
   if (F.a) F.a = F.a.filter(a => a.id === aid);
   F._role = 'analyst';
   F._analyst_id = aid;

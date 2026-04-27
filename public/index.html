@@ -299,7 +299,7 @@ function MonthDrill(props){
   var m=props.m;var mdSrc=props.patchedData&&props.patchedData.md&&props.patchedData.md[m]?props.patchedData.md[m]:D.md[m];var md=mdSrc;
   var mpnl2=props.patchedData?props.patchedData.mpnl:D.mpnl;
   var pnl=mpnl2.find(function(p){return p.m===m;});
-  var eqData=D.mde[m]||md.eq;var cats=D.mdc[m]||[];
+  var eqData=D.mde[m]||md.eq;var cats=D.mdc[m]||md.cats||[];
   var sMd=useSort("rr");var sdMd=md?sMd.fn(md.lb):[];
   var sCat=useSort("rr");var sdCat=sCat.fn(cats);
   if(!md||!pnl) return <div><Bk on={props.back}/><div>No data for {m}</div></div>;
