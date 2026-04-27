@@ -1109,14 +1109,24 @@ function getLastSyncTime() {
 }
 
 function startAutoSync(getOverrides) {
-  // Initial sync
-  const ovs = getOverrides ? getOverrides() : [];
-  syncData(ovs).catch(err => console.error('[API-SYNC] Initial sync error:', err));
+  // Initial sync - await the overrides from database
+  (async () => {
+    try {
+      const ovs = getOverrides ? await getOverrides() : [];
+      await syncData(ovs);
+    } catch (err) {
+      console.error('[API-SYNC] Initial sync error:', err);
+    }
+  })();
 
   // Periodic sync
-  setInterval(() => {
-    const ovs2 = getOverrides ? getOverrides() : [];
-    syncData(ovs2).catch(err => console.error('[API-SYNC] Periodic sync error:', err));
+  setInterval(async () => {
+    try {
+      const ovs2 = getOverrides ? await getOverrides() : [];
+      await syncData(ovs2);
+    } catch (err) {
+      console.error('[API-SYNC] Periodic sync error:', err);
+    }
   }, SYNC_INTERVAL);
 
   console.log(`[API-SYNC] Auto-sync started. Interval: ${SYNC_INTERVAL / 3600000}h`);
