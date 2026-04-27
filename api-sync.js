@@ -540,13 +540,18 @@ function buildDashboardData(trades, baseData) {
   const allYr = [...baseYr, ...apiYearSummary];
 
   // ===== SM/SD (Seasonality - month/day) =====
-  const sm = Array(12).fill(null).map((_, i) => ({ n: MN[i], v: 0 }));
-  const sd = [{ n: 'Mon', v: 0 }, { n: 'Tue', v: 0 }, { n: 'Wed', v: 0 }, { n: 'Thu', v: 0 }, { n: 'Fri', v: 0 }];
-  allMpnl.forEach(p => {
+  // Start with base data values, then add API contributions
+  const baseSM = baseData.sm || Array(12).fill(null).map((_, i) => ({ n: MN[i], v: 0 }));
+  const baseSD = baseData.sd || [{ n: 'Mon', v: 0 }, { n: 'Tue', v: 0 }, { n: 'Wed', v: 0 }, { n: 'Thu', v: 0 }, { n: 'Fri', v: 0 }];
+  const sm = baseSM.map(s => ({ n: s.n, v: s.v }));
+  const sd = baseSD.map(s => ({ n: s.n, v: s.v }));
+  
+  // Add API monthly RR to seasonals
+  apiMpnl.forEach(p => {
     const mi = parseInt(p.m.slice(5)) - 1;
-    sm[mi].v = round1(sm[mi].v + p.rr);
+    if (mi >= 0 && mi < 12) sm[mi].v = round1(sm[mi].v + p.rr);
   });
-  // Day of week from API trades only
+  // Add API day-of-week RR
   for (const t of allTrig) {
     const d = t.dow;
     if (d >= 1 && d <= 5) sd[d - 1].v = round1(sd[d - 1].v + t.rr);
@@ -616,6 +621,48 @@ function buildDashboardData(trades, baseData) {
   Object.keys(baseData.md || {}).forEach(k => {
     if (parseInt(k.substring(0, 4)) < apiStartYear) {
       md[k] = baseData.md[k];
+    }
+  });
+
+  // ===== AMD (Analyst Month Drill - per-analyst version of MD) =====
+  const amd = {};
+  allAnalysts.forEach(a => {
+    amd[a] = {};
+    for (const m of apiMonths) {
+      const mt = monthMap[m];
+      const myAll = mt.filter(t => t.an === a);
+      const myTrig = myAll.filter(t => t.triggered);
+      if (myTrig.length === 0 && myAll.length === 0) continue;
+
+      // Leaderboard: just this analyst
+      const n = myTrig.length;
+      const w = myTrig.filter(t => t.rr > 0).length;
+      const rr = round1(myTrig.reduce((s, t) => s + t.rr, 0));
+      const tgrV = myAll.length > 0 ? round1(n / myAll.length * 100) : 0;
+      let eq2 = 1000, peak2 = 1000, maxDD2 = 0;
+      const dayRRA = {};
+      for (const t of myTrig) { const dk = t.date.substring(0, 10); dayRRA[dk] = (dayRRA[dk] || 0) + t.rr; }
+      for (const dk of Object.keys(dayRRA).sort()) { eq2 += dayRRA[dk] * 10; if (eq2 > peak2) peak2 = eq2; const dd2 = peak2 > 0 ? (peak2 - eq2) / peak2 * 100 : 0; if (dd2 > maxDD2) maxDD2 = dd2; }
+
+      const lb = [{ a, n, w, wr: n > 0 ? round1(w / n * 100) : 0, rr, tgr: tgrV, dd: round2(maxDD2), ret: round2(eq2 / 10 - 100) }];
+
+      // Best/worst 5 symbols for this analyst
+      const symRRA = {};
+      myTrig.forEach(t => { symRRA[t.sym] = (symRRA[t.sym] || 0) + t.rr; });
+      const sortedA = Object.entries(symRRA).sort((x, y) => y[1] - x[1]);
+      const b5 = sortedA.slice(0, 5).map(([s, r]) => ({ s, rr: round1(r) }));
+      const w5 = sortedA.slice(-5).reverse().map(([s, r]) => ({ s, rr: round1(r) })).reverse();
+
+      // Daily equity for this analyst
+      let eqA2 = 1000;
+      const eqPoints = [{ d: 0, eq: 1000 }];
+      for (const dk of Object.keys(dayRRA).sort()) {
+        eqA2 += dayRRA[dk] * 10;
+        const dayNum = parseInt(dk.substring(8, 10));
+        eqPoints.push({ d: dayNum, eq: Math.round(eqA2) });
+      }
+
+      amd[a][m] = { lb, b5, w5, eq: eqPoints, tgr: tgrV };
     }
   });
 
@@ -968,6 +1015,7 @@ function buildDashboardData(trades, baseData) {
     dp: dp,
     ad: ad,
     md: md,
+    amd: amd,
     dd: dd,
     aeq: aeq,
     cov: cov,

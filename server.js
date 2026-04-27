@@ -201,7 +201,41 @@ app.delete('/api/overrides/:id', requireAdmin, async (req, res) => {
 // ===== ANALYST DATA FILTERING =====
 function filterForAnalyst(D, aid) {
   const F = JSON.parse(JSON.stringify(D));
-  if (F.md) Object.keys(F.md).forEach(k => { if (F.md[k].lb) F.md[k].lb = []; });
+  
+  // Replace global month drill with analyst-specific data
+  if (F.amd && F.amd[aid]) {
+    const myAmd = F.amd[aid];
+    Object.keys(F.md).forEach(k => {
+      if (myAmd[k]) {
+        F.md[k] = myAmd[k];
+      } else {
+        // No data for this analyst in this month - show empty
+        F.md[k] = { lb: [], b5: [], w5: [], eq: [], tgr: 0 };
+      }
+    });
+  } else {
+    // Fallback: just hide analyst names
+    Object.keys(F.md).forEach(k => { if (F.md[k].lb) F.md[k].lb = []; });
+  }
+  delete F.amd; // Don't send all analysts' data to client
+
+  // Replace mpnl with analyst's own monthly data so Overview drill-down shows their stats
+  if (F.am && F.am[aid]) {
+    const myAm = F.am[aid];
+    F.mpnl = myAm.map(m => ({
+      m: '20' + m.m.substring(0, 2) + '-' + m.m.substring(3, 5),
+      mu: m.mu,
+      ret: m.ret,
+      n: m.n,
+      w: m.w,
+      wr: m.wr,
+      dd: m.dd,
+      rr: m.rr,
+      tgr: m.tgr,
+      y: '20' + m.m.substring(0, 2)
+    }));
+  }
+
   if (F.am) { const my = F.am[aid] || []; F.am = {}; F.am[aid] = my; }
   if (F.aeq) { const my = F.aeq[aid] || []; F.aeq = {}; F.aeq[aid] = my; }
   if (F.rec) { const my = F.rec[aid] || []; F.rec = {}; F.rec[aid] = my; }
