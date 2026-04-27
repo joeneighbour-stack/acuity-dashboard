@@ -11,6 +11,8 @@ const PORT = process.env.PORT || 3000;
 
 // ===== DATABASE SETUP =====
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'app.db');
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
