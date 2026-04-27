@@ -1018,6 +1018,27 @@ function buildDashboardData(trades, baseData) {
     const worst = symSorted.slice(-5).map(([s, d]) => ({ s, rr: round1(d.rr), n: d.n }));
 
     as[a] = { dow, moy, best, worst };
+
+    // Merge base AS data (2017-2021) into the API-built AS
+    const baseAS = baseData.as ? baseData.as[a] : null;
+    if (baseAS) {
+      if (baseAS.dow) {
+        baseAS.dow.forEach((bd, i) => {
+          if (as[a].dow[i]) {
+            as[a].dow[i].v = round1(as[a].dow[i].v + bd.v);
+            as[a].dow[i].t = (as[a].dow[i].t || 0) + (bd.t || 0);
+          }
+        });
+      }
+      if (baseAS.moy) {
+        baseAS.moy.forEach((bm, i) => {
+          if (as[a].moy[i]) {
+            as[a].moy[i].v = round1(as[a].moy[i].v + (bm.v || 0));
+            as[a].moy[i].t = (as[a].moy[i].t || 0) + (bm.t || 0);
+          }
+        });
+      }
+    }
   });
   // Keep base AS for non-active analysts
   Object.keys(baseData.as || {}).forEach(a => {

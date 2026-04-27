@@ -317,17 +317,24 @@ function filterForAnalyst(D, aid) {
       rr: Math.round(d.rr * 10) / 10
     }));
 
-    // Rebuild monthly seasonals from analyst's months
+    // Rebuild monthly seasonals from analyst's AS data (full history) + base
     const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    F.sm = MN.map(n => ({ n, v: 0 }));
-    myMpnl.forEach(p => {
-      const mi = parseInt(p.m.slice(5)) - 1;
-      if (mi >= 0 && mi < 12) F.sm[mi].v = Math.round((F.sm[mi].v + p.rr) * 10) / 10;
-    });
+    if (F.as && F.as[aid] && F.as[aid].moy) {
+      F.sm = F.as[aid].moy.map(m => ({ n: m.n, v: m.v }));
+    } else {
+      F.sm = MN.map(n => ({ n, v: 0 }));
+      myMpnl.forEach(p => {
+        const mi = parseInt(p.m.slice(5)) - 1;
+        if (mi >= 0 && mi < 12) F.sm[mi].v = Math.round((F.sm[mi].v + p.rr) * 10) / 10;
+      });
+    }
   }
 
-  // Rebuild day-of-week from analyst's trades in dd
-  if (F.dd) {
+  // Use AS (analyst seasonals) for day-of-week (full trade history, not just last 30 days)
+  if (F.as && F.as[aid] && F.as[aid].dow) {
+    F.sd = F.as[aid].dow.map(d => ({ n: d.n, v: d.v }));
+  } else if (F.dd) {
+    // Fallback: rebuild from dd (last 30 days only)
     F.sd = [{ n: 'Mon', v: 0 }, { n: 'Tue', v: 0 }, { n: 'Wed', v: 0 }, { n: 'Thu', v: 0 }, { n: 'Fri', v: 0 }];
     Object.entries(F.dd).forEach(([dateStr, dayData]) => {
       if (dayData.t) {
