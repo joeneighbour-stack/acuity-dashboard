@@ -604,28 +604,37 @@ function FlagModal(props){
 }
 
 function OverrideModal(props){
-  var[entry,setEntry]=useState("");var[exit2,setExit]=useState("");var[rr,setRR]=useState("");
+  var d=props.data;
+  var[entry,setEntry]=useState(d.origEntry?String(d.origEntry):"");var[exit2,setExit]=useState(d.origExit?String(d.origExit):"");
+  var stop=d.stop||0;var dir=d.dir||"BUY";
+  var entryN=parseFloat(entry)||0;var exitN=parseFloat(exit2)||0;
+  var risk=dir==="BUY"?(entryN-stop):(stop-entryN);
+  var reward=dir==="BUY"?(exitN-entryN):(entryN-exitN);
+  var autoRR=risk>0?Math.round(reward/risk*1000)/1000:0;
   var ov={position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999};
   var inp={width:"100%",padding:"8px 10px",background:P.bg,color:P.tx,border:"1px solid "+P.bd,borderRadius:6,fontSize:11,fontFamily:"inherit",marginBottom:10,boxSizing:"border-box"};
   return(<div style={ov} onClick={props.onClose}><div onClick={function(e){e.stopPropagation();}} style={{background:P.cd,borderRadius:12,padding:20,border:"1px solid "+P.bd,width:340,maxWidth:"90vw"}}>
-    <div style={{fontSize:14,fontWeight:700,color:P.gn,marginBottom:12,fontFamily:"'DM Serif Text',serif"}}>Mark as Triggered</div>
-    <div style={{fontSize:11,color:P.tm,marginBottom:12}}>{props.data.sym} {props.data.dir} — {D.n[props.data.an]||props.data.an} on {props.data.d}</div>
+    <div style={{fontSize:14,fontWeight:700,color:P.gn,marginBottom:12,fontFamily:"'DM Serif Text',serif"}}>Amend Trade</div>
+    <div style={{fontSize:11,color:P.tm,marginBottom:6}}>{d.sym} {d.dir} — {D.n[d.an]||d.an}{d.d?" on "+d.d:""}</div>
+    <div style={{fontSize:10,color:P.td,marginBottom:12}}>Stop: {stop}</div>
     <div style={{fontSize:10,color:P.td,marginBottom:4}}>Entry Price</div>
     <input value={entry} onChange={function(e){setEntry(e.target.value);}} placeholder="0.00" style={inp}/>
     <div style={{fontSize:10,color:P.td,marginBottom:4}}>Exit Price</div>
     <input value={exit2} onChange={function(e){setExit(e.target.value);}} placeholder="0.00" style={inp}/>
-    <div style={{fontSize:10,color:P.td,marginBottom:4}}>R:R Value</div>
-    <input value={rr} onChange={function(e){setRR(e.target.value);}} placeholder="0.00" style={inp}/>
+    <div style={{padding:"8px 10px",background:P.bg,borderRadius:6,border:"1px solid "+P.bd,marginBottom:14}}>
+      <span style={{fontSize:10,color:P.td}}>Calculated R:R: </span>
+      <span style={{fontSize:14,fontWeight:700,color:autoRR>0?P.gn:autoRR<0?P.rd:P.td}}>{autoRR.toFixed(3)}</span>
+    </div>
     <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
       <button onClick={props.onClose} style={{padding:"6px 14px",background:"transparent",border:"1px solid "+P.bd,color:P.tm,borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>Cancel</button>
-      <button onClick={function(){props.onSubmit({entry:parseFloat(entry)||0,exit:parseFloat(exit2)||0,rr:parseFloat(rr)||0});}} style={{padding:"6px 14px",background:P.gn,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Confirm Triggered</button>
+      <button onClick={function(){props.onSubmit({entry:entryN,exit:exitN,rr:autoRR});}} style={{padding:"6px 14px",background:P.gn,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Save Amendment</button>
     </div>
   </div></div>);
 }
 
 
 function Monitor(props){
-  if(props.monDay&&!props.monA) return <DayDrill day={props.monDay} back={function(){props.setMonDay(null);}} flags={props.flags} setFlags={props.setFlags} onAsset={props.onAsset} setFlagModal={props.setFlagModal} overrides={props.overrides} applyOverrides={props.applyOverrides} patchedDd={props.patchedData&&props.patchedData.dd?props.patchedData.dd:null}/>;
+  if(props.monDay&&!props.monA) return <DayDrill day={props.monDay} back={function(){props.setMonDay(null);}} flags={props.flags} setFlags={props.setFlags} onAsset={props.onAsset} setFlagModal={props.setFlagModal} setOverModal={props.setOverModal} overrides={props.overrides} applyOverrides={props.applyOverrides} patchedDd={props.patchedData&&props.patchedData.dd?props.patchedData.dd:null}/>;
   if(props.monA) return <AnalystMonitor id={props.monA} back={function(){props.setMonA(null);props.setMonDay(null);}} flags={props.flags} setFlags={props.setFlags} monDay={props.monDay} setMonDay={props.setMonDay} onAsset={props.onAsset} setFlagModal={props.setFlagModal} setOverModal={props.setOverModal} overrides={props.overrides} applyOverrides={props.applyOverrides} patchedData={props.patchedData} patchedDd={props.patchedData&&props.patchedData.dd?props.patchedData.dd:null}/>;
   var dp=props.patchedData?props.patchedData.dp:D.dp;
   return(<div>
@@ -638,10 +647,10 @@ function Monitor(props){
     </div>:null}
     {props.flags.length>0?<div style={{background:"#FF8F1415",border:"1px solid "+P.am,borderRadius:8,padding:10,marginBottom:14}}>
       <div style={{fontSize:11,fontWeight:600,color:P.am,marginBottom:6}}>Flagged Trades ({props.flags.length})</div>
-      {props.flags.map(function(f,i){return(<div key={i} style={{fontSize:10,color:P.tm,padding:"4px 0",borderBottom:"1px solid #3d3d3d20",display:"flex",alignItems:"center",gap:6}}>
-        <div style={{flex:1}}>{f.st?<Badge st={f.st}/>:null} <span style={{color:P.ac}}>{D.n[f.an]||f.an}</span> - {f.sym} {f.dir} on {f.d} <span style={{color:P.am,fontSize:10}}>{f.reason}</span></div>
-        {f.st==="pending"||f.reason&&f.reason.indexOf("OVERRIDDEN")>=0?<button onClick={function(){props.setOverModal({an:f.an,sym:f.sym,dir:f.dir,d:f.d,idx:i});}} style={{padding:"3px 8px",background:P.gn+"20",border:"1px solid "+P.gn,color:P.gn,borderRadius:4,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>{f.reason&&f.reason.indexOf("OVERRIDDEN")>=0?"Update":"Mark Triggered"}</button>:null}
-        <button onClick={function(){props.setFlags(function(p){return p.filter(function(_,j){return j!==i;});});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.rd,color:P.rd,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>{"\u00D7"}</button>
+      {props.flags.map(function(f,i){var fStatus=f.status||"pending";return(<div key={f.id||i} style={{fontSize:10,color:P.tm,padding:"4px 0",borderBottom:"1px solid #3d3d3d20",display:"flex",alignItems:"center",gap:6}}>
+        <div style={{flex:1}}><span style={{padding:"1px 4px",borderRadius:3,fontSize:8,marginRight:4,background:fStatus==="resolved"?"#22c58330":"#FF8F1430",color:fStatus==="resolved"?P.gn:P.am}}>{fStatus}</span> <span style={{color:P.ac}}>{D.n[f.an]||f.an}</span> - {f.sym} {f.dir} {f.d?" on "+f.d:""} <span style={{color:P.am,fontSize:10}}>{f.reason}</span>{f.flagged_by?<span style={{color:P.td,fontSize:9}}> (by {f.flagged_by})</span>:null}</div>
+        {isAdmin&&fStatus==="pending"?<button onClick={function(){props.setOverModal({an:f.an,sym:f.sym,dir:f.dir,d:f.d,id:f.trade_id,origEntry:0,origExit:0,stop:0});}} style={{padding:"3px 8px",background:P.gn+"20",border:"1px solid "+P.gn,color:P.gn,borderRadius:4,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>Amend</button>:null}
+        {isAdmin?<button onClick={function(){var fid=f.id;if(!fid)return;fetch("/api/flags/"+fid,{method:"DELETE"}).then(function(){return fetch("/api/flags");}).then(function(r){return r.json();}).then(function(fl){props.setFlags(fl);});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.rd,color:P.rd,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>{"\u00D7"}</button>:null}
       </div>);})}
     </div>:null}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(44px,1fr))",gap:4,marginBottom:20}}>
@@ -686,7 +695,7 @@ function DayDrill(props){
         <td style={{padding:4,color:t.dir==="BUY"?P.gn:P.rd,fontWeight:600}}>{t.dir}</td>
         <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.pts>0?P.gn:t.pts<0?P.rd:P.td}}>{t.st==="live"?fm(t.pts):"-"}</td>
         <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.rr>0?P.gn:t.rr<0?P.rd:P.td}}>{t.st==="live"?fm(t.rr,3):"-"}</td>
-        <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:t.an,sym:t.sym,dir:t.dir,d:(function(){var p2=props.day.split("-");return parseInt(p2[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p2[1])];})(),st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
+        <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:t.an,sym:t.sym,dir:t.dir,d:(function(){var p2=props.day.split("-");return parseInt(p2[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p2[1])];})(),st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isAdmin?<button onClick={function(){props.setOverModal({id:t.id,an:t.an,sym:t.sym,dir:t.dir,d:(function(){var p2=props.day.split("-");return parseInt(p2[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p2[1])];})(),origEntry:t.e,origExit:t.ex,stop:t.stop});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.gn,color:P.gn,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit",marginLeft:3}}>Amend</button>:null}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
       </tr>);})}</tbody></table>
   </div>);
 }
@@ -719,7 +728,7 @@ function AnalystMonitor(props){
           <td style={{padding:4,color:t.dir==="BUY"?P.gn:P.rd,fontWeight:600}}>{t.dir}</td>
           <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.pts>0?P.gn:t.pts<0?P.rd:P.td}}>{t.st==="live"?fm(t.pts):"-"}</td>
           <td style={{padding:4,textAlign:"right",fontWeight:600,color:t.rr>0?P.gn:t.rr<0?P.rd:P.td}}>{t.st==="live"?fm(t.rr,3):"-"}</td>
-          <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:(function(){var p4=props.monDay.split("-");return parseInt(p4[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p4[1])];})(),st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
+          <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:(function(){var p4=props.monDay.split("-");return parseInt(p4[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p4[1])];})(),st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isAdmin?<button onClick={function(){props.setOverModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:(function(){var p4=props.monDay.split("-");return parseInt(p4[2])+" "+["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(p4[1])];})(),origEntry:t.e,origExit:t.ex,stop:t.stop});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.gn,color:P.gn,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit",marginLeft:3}}>Amend</button>:null}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
         </tr>);})}</tbody></table>
     </div>);
   }
@@ -755,7 +764,7 @@ function AnalystMonitor(props){
         <td style={{padding:"4px 6px",color:t.dir==="BUY"?P.gn:P.rd,fontWeight:600}}>{t.dir}</td>
         <td style={{padding:"4px 6px",textAlign:"right"}}>{t.e}</td><td style={{padding:"4px 6px",textAlign:"right"}}>{t.st==="live"?t.ex:"-"}</td>
         <td style={{padding:"4px 6px",textAlign:"right",fontWeight:600,color:t.rr>0?P.gn:t.rr<0?P.rd:P.td}}>{t.st==="live"?fm(t.rr,3):"-"}</td>
-        <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:t.d,st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
+        <td style={{padding:4,textAlign:"center"}}>{<button onClick={function(){props.setFlagModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:t.d,st:t.st});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.am,color:P.am,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Flag</button>}{isAdmin?<button onClick={function(){props.setOverModal({id:t.id,an:id,sym:t.sym,dir:t.dir,d:t.d,origEntry:t.e,origExit:t.ex,stop:t.stop});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.gn,color:P.gn,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit",marginLeft:3}}>Amend</button>:null}{isFl?<span style={{color:P.am,fontSize:9,marginLeft:4}}>{"⚑"}</span>:null}</td>
       </tr>);})}</tbody></table>
   </div>);
 }

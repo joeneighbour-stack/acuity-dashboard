@@ -612,7 +612,7 @@ function buildDashboardData(trades, baseData) {
     const dayTrades = trades.filter(t => t.date.substring(0, 10) === dateStr);
     const t = dayTrades.map(t2 => ({
       sym: t2.sym, an: t2.an, dir: t2.dir, pts: t2.pts, rr: t2.rr,
-      id: t2.id, st: t2.st
+      id: t2.id, st: t2.st, e: t2.entry, ex: t2.exit, stop: t2.stop
     }));
 
     // BA (by analyst) for triggered trades
@@ -705,6 +705,7 @@ function buildDashboardData(trades, baseData) {
           dir: t.dir,
           e: t.entry,
           ex: t.exit || 0,
+          stop: t.stop || 0,
           pts: t.triggered ? t.pts : 0,
           rr: t.triggered ? t.rr : 0,
           id: t.id,
