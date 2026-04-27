@@ -305,12 +305,19 @@ function buildDashboardData(trades, baseData) {
     const tgr = yearNum >= 2023 ? (mt.length > 0 ? round1(rawTrigCount / mt.length * 100) : 0) : 0;
 
     // Compute return and drawdown from triggered trades
-    let eq = 1000, peak = 1000, maxDD = 0;
+    // Aggregate by day first, then compute equity curve from daily returns
+    const dayRR = {};
     trig.sort((a, b) => a.date.localeCompare(b.date));
     for (const t of trig) {
-      eq += t.ret;
+      const day = t.date.substring(0, 10);
+      dayRR[day] = (dayRR[day] || 0) + t.rr;
+    }
+    const sortedDays = Object.keys(dayRR).sort();
+    let eq = 1000, peak = 1000, maxDD = 0;
+    for (const day of sortedDays) {
+      eq += dayRR[day] * 10; // 1% risk model: RR * 10
       if (eq > peak) peak = eq;
-      const dd = (peak - eq) / peak * 100;
+      const dd = peak > 0 ? (peak - eq) / peak * 100 : 0;
       if (dd > maxDD) maxDD = dd;
     }
     const ret = round2(eq / 10 - 100);
@@ -464,13 +471,19 @@ function buildDashboardData(trades, baseData) {
       const rawTrigCount2 = mt.filter(t => t.rawTriggered).length;
       const tgr = yearNum2 >= 2023 ? (allSetups > 0 ? round1(rawTrigCount2 / allSetups * 100) : 0) : 0;
 
-      // Compute return & drawdown
-      let eq = 1000, peak = 1000, maxDD = 0;
+      // Compute return & drawdown (aggregate by day first)
+      const dayRR2 = {};
       trig.sort((a, b) => a.date.localeCompare(b.date));
       for (const t of trig) {
-        eq += t.ret;
+        const day2 = t.date.substring(0, 10);
+        dayRR2[day2] = (dayRR2[day2] || 0) + t.rr;
+      }
+      const sortedDays2 = Object.keys(dayRR2).sort();
+      let eq = 1000, peak = 1000, maxDD = 0;
+      for (const day2 of sortedDays2) {
+        eq += dayRR2[day2] * 10;
         if (eq > peak) peak = eq;
-        const dd = (peak - eq) / peak * 100;
+        const dd = peak > 0 ? (peak - eq) / peak * 100 : 0;
         if (dd > maxDD) maxDD = dd;
       }
       const ret = round2(eq / 10 - 100);
@@ -561,7 +574,9 @@ function buildDashboardData(trades, baseData) {
       const tgrV = d.all.length > 0 ? round1(n / d.all.length * 100) : 0;
       let eq2 = 1000, peak2 = 1000, maxDD2 = 0;
       at.sort((a2, b) => a2.date.localeCompare(b.date));
-      for (const t of at) { eq2 += t.ret; if (eq2 > peak2) peak2 = eq2; const dd2 = (peak2 - eq2) / peak2 * 100; if (dd2 > maxDD2) maxDD2 = dd2; }
+      const dayRR3 = {};
+      for (const t of at) { const dk = t.date.substring(0, 10); dayRR3[dk] = (dayRR3[dk] || 0) + t.rr; }
+      for (const dk of Object.keys(dayRR3).sort()) { eq2 += dayRR3[dk] * 10; if (eq2 > peak2) peak2 = eq2; const dd2 = peak2 > 0 ? (peak2 - eq2) / peak2 * 100 : 0; if (dd2 > maxDD2) maxDD2 = dd2; }
       return {
         a: a,
         n: n,
@@ -601,6 +616,50 @@ function buildDashboardData(trades, baseData) {
   Object.keys(baseData.md || {}).forEach(k => {
     if (parseInt(k.substring(0, 4)) < apiStartYear) {
       md[k] = baseData.md[k];
+    }
+  });
+
+  // ===== AMD (Analyst Month Drill - per-analyst version of MD) =====
+  const amd = {};
+  allAnalysts.forEach(a => {
+    amd[a] = {};
+    for (const m of apiMonths) {
+      const mt = monthMap[m];
+      const myAll = mt.filter(t => t.an === a);
+      const myTrig = myAll.filter(t => t.triggered);
+      if (myTrig.length === 0 && myAll.length === 0) continue;
+
+      // Leaderboard: just this analyst
+      const n = myTrig.length;
+      const w = myTrig.filter(t => t.rr > 0).length;
+      const rr = round1(myTrig.reduce((s, t) => s + t.rr, 0));
+      const tgrV = myAll.length > 0 ? round1(n / myAll.length * 100) : 0;
+      let eq2 = 1000, peak2 = 1000, maxDD2 = 0;
+      const dayRRA = {};
+      for (const t of myTrig) { const dk = t.date.substring(0, 10); dayRRA[dk] = (dayRRA[dk] || 0) + t.rr; }
+      for (const dk of Object.keys(dayRRA).sort()) { eq2 += dayRRA[dk] * 10; if (eq2 > peak2) peak2 = eq2; const dd2 = peak2 > 0 ? (peak2 - eq2) / peak2 * 100 : 0; if (dd2 > maxDD2) maxDD2 = dd2; }
+
+      const lb = [{ a, n, w, wr: n > 0 ? round1(w / n * 100) : 0, rr, tgr: tgrV, dd: round2(maxDD2), ret: round2(eq2 / 10 - 100) }];
+
+      // Best/worst 5 symbols for this analyst
+      const symRRA = {};
+      myTrig.forEach(t => { symRRA[t.sym] = (symRRA[t.sym] || 0) + t.rr; });
+      const sortedA = Object.entries(symRRA).sort((x, y) => y[1] - x[1]);
+      const b5 = sortedA.slice(0, 5).map(([s, r]) => ({ s, rr: round1(r) }));
+      const w5 = sortedA.slice(-5).reverse().map(([s, r]) => ({ s, rr: round1(r) })).reverse();
+
+      // Daily equity for this analyst
+      const dayMapA = {};
+      for (const dk of Object.keys(dayRRA).sort()) {
+        if (!dayMapA._eq) dayMapA._eq = 1000;
+        dayMapA._eq += dayRRA[dk] * 10;
+        const dayNum = parseInt(dk.substring(8, 10));
+        dayMapA[dayNum] = Math.round(dayMapA._eq);
+      }
+      delete dayMapA._eq;
+      const eqA = Object.entries(dayMapA).map(([d, e]) => ({ d: parseInt(d), eq: e }));
+
+      amd[a][m] = { lb, b5, w5, eq: eqA, tgr: tgrV };
     }
   });
 
@@ -842,7 +901,9 @@ function buildDashboardData(trades, baseData) {
       const rr = round1(d.trig.reduce((s, t) => s + t.rr, 0));
       let eq2 = 1000, peak2 = 1000, maxDD2 = 0;
       d.trig.sort((a, b) => a.date.localeCompare(b.date));
-      for (const t of d.trig) { eq2 += t.ret; if (eq2 > peak2) peak2 = eq2; const dd2 = (peak2 - eq2) / peak2 * 100; if (dd2 > maxDD2) maxDD2 = dd2; }
+      const dayRR4 = {};
+      for (const t of d.trig) { const dk = t.date.substring(0, 10); dayRR4[dk] = (dayRR4[dk] || 0) + t.rr; }
+      for (const dk of Object.keys(dayRR4).sort()) { eq2 += dayRR4[dk] * 10; if (eq2 > peak2) peak2 = eq2; const dd2 = peak2 > 0 ? (peak2 - eq2) / peak2 * 100 : 0; if (dd2 > maxDD2) maxDD2 = dd2; }
       return {
         c: c,
         n: n,
@@ -861,19 +922,19 @@ function buildDashboardData(trades, baseData) {
   const recentMonths = apiMonths.slice(-15);
   recentMonths.forEach(m => {
     const mt = monthMap[m].filter(t => t.triggered);
-    mt.sort((a, b) => a.date.localeCompare(b.date));
-    let eq2 = 1000;
-    const dayData = {};
+    // Aggregate RR by day
+    const dayRR5 = {};
+    const dayTC = {};
     for (const t of mt) {
-      eq2 = round2(eq2 + t.ret);
       const d = t.day;
-      if (!dayData[d]) dayData[d] = { eq: 0, tc: 0 };
-      dayData[d].eq = Math.round(eq2);
-      dayData[d].tc++;
+      dayRR5[d] = (dayRR5[d] || 0) + t.rr;
+      dayTC[d] = (dayTC[d] || 0) + 1;
     }
+    let eq2 = 1000;
     const points = [{ d: 0, eq: 1000, tc: 0 }];
-    Object.entries(dayData).sort(([a], [b]) => parseInt(a) - parseInt(b)).forEach(([d, v]) => {
-      points.push({ d: parseInt(d), eq: v.eq, tc: v.tc });
+    Object.keys(dayRR5).sort((a, b) => parseInt(a) - parseInt(b)).forEach(d => {
+      eq2 = Math.round(eq2 + dayRR5[d] * 10);
+      points.push({ d: parseInt(d), eq: eq2, tc: dayTC[d] || 0 });
     });
     mde[m] = points;
   });
@@ -951,6 +1012,7 @@ function buildDashboardData(trades, baseData) {
     dp: dp,
     ad: ad,
     md: md,
+    amd: amd,
     dd: dd,
     aeq: aeq,
     cov: cov,
@@ -972,7 +1034,7 @@ let cachedData = null;
 let lastSyncTime = null;
 let syncInProgress = false;
 
-async function syncData() {
+async function syncData(dbOverrides) {
   if (syncInProgress) {
     console.log('[API-SYNC] Sync already in progress, skipping...');
     return cachedData;
@@ -984,13 +1046,82 @@ async function syncData() {
     const basePath = path.join(__dirname, 'data', 'dashboard_data.json');
     const baseData = JSON.parse(fs.readFileSync(basePath, 'utf8'));
 
-    // Fetch from API: 2021 to today
+    // Fetch from API: 2022 to today
     const today = new Date();
     const toDate = today.toISOString().substring(0, 10);
     const rawRows = await fetchTrades(API_START_DATE, toDate);
 
     // Clean and transform
     const trades = cleanRows(rawRows);
+
+    // Apply database overrides to trades
+    if (dbOverrides && dbOverrides.length > 0) {
+      let applied = 0;
+      const monthNames = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+      
+      for (const ov of dbOverrides) {
+        // Find matching trade by trade_id first (most reliable)
+        let match = null;
+        if (ov.trade_id) {
+          match = trades.find(t => String(t.id) === String(ov.trade_id));
+        }
+        
+        // Fallback: match by sym+an+dir+date
+        if (!match && ov.sym && ov.an && ov.dir) {
+          // Parse the d field which might be "22 Apr" or "22/04/2026" or null
+          let dateMatch = null;
+          if (ov.d) {
+            const parts = ov.d.split(' ');
+            if (parts.length === 2 && monthNames[parts[1]]) {
+              // "22 Apr" format - match day and month
+              const day = parts[0].padStart(2, '0');
+              const mon = monthNames[parts[1]];
+              dateMatch = '-' + mon + '-' + day;
+            } else if (ov.d.includes('/')) {
+              // "22/04/2026" format
+              const dp = ov.d.split('/');
+              dateMatch = dp[2] + '-' + dp[1] + '-' + dp[0];
+            }
+          }
+          
+          match = trades.find(t => {
+            if (t.sym !== ov.sym || t.an !== ov.an || t.dir !== ov.dir) return false;
+            if (dateMatch) return t.date.includes(dateMatch);
+            return true; // no date filter - match first by sym/an/dir
+          });
+        }
+        
+        if (match) {
+          // Apply override values
+          if (ov.entry && ov.entry > 0) match.entry = ov.entry;
+          if (ov.exit_val && ov.exit_val > 0) match.exit = ov.exit_val;
+          
+          // Recalculate RR from the (possibly amended) entry, exit, stop
+          const risk = match.dir === 'BUY' 
+            ? Math.abs(match.entry - match.stop) 
+            : Math.abs(match.stop - match.entry);
+          const reward = match.dir === 'BUY' 
+            ? (match.exit - match.entry) 
+            : (match.entry - match.exit);
+          const newRR = risk > 0 ? round2(reward / risk) : 0;
+          
+          // Use calculated RR (always recalculate from entry/exit/stop)
+          match.rr = newRR;
+          match.pts = round2(reward);
+          match.ret = round2(match.rr * 10);
+          
+          // If trade was pending, mark as triggered
+          if (!match.triggered) {
+            match.triggered = true;
+            match.rawTriggered = true;
+            match.st = 'live';
+          }
+          
+          applied++;
+        }
+      }
+      if (applied > 0) console.log(`[API-SYNC] Applied ${applied}/${dbOverrides.length} overrides from database`);
+    }
 
     // Build dashboard data
     cachedData = buildDashboardData(trades, baseData);
@@ -1022,13 +1153,25 @@ function getLastSyncTime() {
   return lastSyncTime;
 }
 
-function startAutoSync() {
-  // Initial sync
-  syncData().catch(err => console.error('[API-SYNC] Initial sync error:', err));
+function startAutoSync(getOverrides) {
+  // Initial sync - await the overrides from database
+  (async () => {
+    try {
+      const ovs = getOverrides ? await getOverrides() : [];
+      await syncData(ovs);
+    } catch (err) {
+      console.error('[API-SYNC] Initial sync error:', err);
+    }
+  })();
 
   // Periodic sync
-  setInterval(() => {
-    syncData().catch(err => console.error('[API-SYNC] Periodic sync error:', err));
+  setInterval(async () => {
+    try {
+      const ovs2 = getOverrides ? await getOverrides() : [];
+      await syncData(ovs2);
+    } catch (err) {
+      console.error('[API-SYNC] Periodic sync error:', err);
+    }
   }, SYNC_INTERVAL);
 
   console.log(`[API-SYNC] Auto-sync started. Interval: ${SYNC_INTERVAL / 3600000}h`);
