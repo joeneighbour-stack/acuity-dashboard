@@ -305,12 +305,19 @@ function buildDashboardData(trades, baseData) {
     const tgr = yearNum >= 2023 ? (mt.length > 0 ? round1(rawTrigCount / mt.length * 100) : 0) : 0;
 
     // Compute return and drawdown from triggered trades
-    let eq = 1000, peak = 1000, maxDD = 0;
+    // Aggregate by day first, then compute equity curve from daily returns
+    const dayRR = {};
     trig.sort((a, b) => a.date.localeCompare(b.date));
     for (const t of trig) {
-      eq += t.ret;
+      const day = t.date.substring(0, 10);
+      dayRR[day] = (dayRR[day] || 0) + t.rr;
+    }
+    const sortedDays = Object.keys(dayRR).sort();
+    let eq = 1000, peak = 1000, maxDD = 0;
+    for (const day of sortedDays) {
+      eq += dayRR[day] * 10; // 1% risk model: RR * 10
       if (eq > peak) peak = eq;
-      const dd = (peak - eq) / peak * 100;
+      const dd = peak > 0 ? (peak - eq) / peak * 100 : 0;
       if (dd > maxDD) maxDD = dd;
     }
     const ret = round2(eq / 10 - 100);
@@ -464,13 +471,19 @@ function buildDashboardData(trades, baseData) {
       const rawTrigCount2 = mt.filter(t => t.rawTriggered).length;
       const tgr = yearNum2 >= 2023 ? (allSetups > 0 ? round1(rawTrigCount2 / allSetups * 100) : 0) : 0;
 
-      // Compute return & drawdown
-      let eq = 1000, peak = 1000, maxDD = 0;
+      // Compute return & drawdown (aggregate by day first)
+      const dayRR2 = {};
       trig.sort((a, b) => a.date.localeCompare(b.date));
       for (const t of trig) {
-        eq += t.ret;
+        const day2 = t.date.substring(0, 10);
+        dayRR2[day2] = (dayRR2[day2] || 0) + t.rr;
+      }
+      const sortedDays2 = Object.keys(dayRR2).sort();
+      let eq = 1000, peak = 1000, maxDD = 0;
+      for (const day2 of sortedDays2) {
+        eq += dayRR2[day2] * 10;
         if (eq > peak) peak = eq;
-        const dd = (peak - eq) / peak * 100;
+        const dd = peak > 0 ? (peak - eq) / peak * 100 : 0;
         if (dd > maxDD) maxDD = dd;
       }
       const ret = round2(eq / 10 - 100);
@@ -561,7 +574,9 @@ function buildDashboardData(trades, baseData) {
       const tgrV = d.all.length > 0 ? round1(n / d.all.length * 100) : 0;
       let eq2 = 1000, peak2 = 1000, maxDD2 = 0;
       at.sort((a2, b) => a2.date.localeCompare(b.date));
-      for (const t of at) { eq2 += t.ret; if (eq2 > peak2) peak2 = eq2; const dd2 = (peak2 - eq2) / peak2 * 100; if (dd2 > maxDD2) maxDD2 = dd2; }
+      const dayRR3 = {};
+      for (const t of at) { const dk = t.date.substring(0, 10); dayRR3[dk] = (dayRR3[dk] || 0) + t.rr; }
+      for (const dk of Object.keys(dayRR3).sort()) { eq2 += dayRR3[dk] * 10; if (eq2 > peak2) peak2 = eq2; const dd2 = peak2 > 0 ? (peak2 - eq2) / peak2 * 100 : 0; if (dd2 > maxDD2) maxDD2 = dd2; }
       return {
         a: a,
         n: n,
@@ -842,7 +857,9 @@ function buildDashboardData(trades, baseData) {
       const rr = round1(d.trig.reduce((s, t) => s + t.rr, 0));
       let eq2 = 1000, peak2 = 1000, maxDD2 = 0;
       d.trig.sort((a, b) => a.date.localeCompare(b.date));
-      for (const t of d.trig) { eq2 += t.ret; if (eq2 > peak2) peak2 = eq2; const dd2 = (peak2 - eq2) / peak2 * 100; if (dd2 > maxDD2) maxDD2 = dd2; }
+      const dayRR4 = {};
+      for (const t of d.trig) { const dk = t.date.substring(0, 10); dayRR4[dk] = (dayRR4[dk] || 0) + t.rr; }
+      for (const dk of Object.keys(dayRR4).sort()) { eq2 += dayRR4[dk] * 10; if (eq2 > peak2) peak2 = eq2; const dd2 = peak2 > 0 ? (peak2 - eq2) / peak2 * 100 : 0; if (dd2 > maxDD2) maxDD2 = dd2; }
       return {
         c: c,
         n: n,
@@ -861,19 +878,19 @@ function buildDashboardData(trades, baseData) {
   const recentMonths = apiMonths.slice(-15);
   recentMonths.forEach(m => {
     const mt = monthMap[m].filter(t => t.triggered);
-    mt.sort((a, b) => a.date.localeCompare(b.date));
-    let eq2 = 1000;
-    const dayData = {};
+    // Aggregate RR by day
+    const dayRR5 = {};
+    const dayTC = {};
     for (const t of mt) {
-      eq2 = round2(eq2 + t.ret);
       const d = t.day;
-      if (!dayData[d]) dayData[d] = { eq: 0, tc: 0 };
-      dayData[d].eq = Math.round(eq2);
-      dayData[d].tc++;
+      dayRR5[d] = (dayRR5[d] || 0) + t.rr;
+      dayTC[d] = (dayTC[d] || 0) + 1;
     }
+    let eq2 = 1000;
     const points = [{ d: 0, eq: 1000, tc: 0 }];
-    Object.entries(dayData).sort(([a], [b]) => parseInt(a) - parseInt(b)).forEach(([d, v]) => {
-      points.push({ d: parseInt(d), eq: v.eq, tc: v.tc });
+    Object.keys(dayRR5).sort((a, b) => parseInt(a) - parseInt(b)).forEach(d => {
+      eq2 = Math.round(eq2 + dayRR5[d] * 10);
+      points.push({ d: parseInt(d), eq: eq2, tc: dayTC[d] || 0 });
     });
     mde[m] = points;
   });
