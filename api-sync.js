@@ -972,7 +972,7 @@ let cachedData = null;
 let lastSyncTime = null;
 let syncInProgress = false;
 
-async function syncData() {
+async function syncData(dbOverrides) {
   if (syncInProgress) {
     console.log('[API-SYNC] Sync already in progress, skipping...');
     return cachedData;
@@ -984,13 +984,82 @@ async function syncData() {
     const basePath = path.join(__dirname, 'data', 'dashboard_data.json');
     const baseData = JSON.parse(fs.readFileSync(basePath, 'utf8'));
 
-    // Fetch from API: 2021 to today
+    // Fetch from API: 2022 to today
     const today = new Date();
     const toDate = today.toISOString().substring(0, 10);
     const rawRows = await fetchTrades(API_START_DATE, toDate);
 
     // Clean and transform
     const trades = cleanRows(rawRows);
+
+    // Apply database overrides to trades
+    if (dbOverrides && dbOverrides.length > 0) {
+      let applied = 0;
+      const monthNames = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+      
+      for (const ov of dbOverrides) {
+        // Find matching trade by trade_id first (most reliable)
+        let match = null;
+        if (ov.trade_id) {
+          match = trades.find(t => String(t.id) === String(ov.trade_id));
+        }
+        
+        // Fallback: match by sym+an+dir+date
+        if (!match && ov.sym && ov.an && ov.dir) {
+          // Parse the d field which might be "22 Apr" or "22/04/2026" or null
+          let dateMatch = null;
+          if (ov.d) {
+            const parts = ov.d.split(' ');
+            if (parts.length === 2 && monthNames[parts[1]]) {
+              // "22 Apr" format - match day and month
+              const day = parts[0].padStart(2, '0');
+              const mon = monthNames[parts[1]];
+              dateMatch = '-' + mon + '-' + day;
+            } else if (ov.d.includes('/')) {
+              // "22/04/2026" format
+              const dp = ov.d.split('/');
+              dateMatch = dp[2] + '-' + dp[1] + '-' + dp[0];
+            }
+          }
+          
+          match = trades.find(t => {
+            if (t.sym !== ov.sym || t.an !== ov.an || t.dir !== ov.dir) return false;
+            if (dateMatch) return t.date.includes(dateMatch);
+            return true; // no date filter - match first by sym/an/dir
+          });
+        }
+        
+        if (match) {
+          // Apply override values
+          if (ov.entry && ov.entry > 0) match.entry = ov.entry;
+          if (ov.exit_val && ov.exit_val > 0) match.exit = ov.exit_val;
+          
+          // Recalculate RR from the (possibly amended) entry, exit, stop
+          const risk = match.dir === 'BUY' 
+            ? Math.abs(match.entry - match.stop) 
+            : Math.abs(match.stop - match.entry);
+          const reward = match.dir === 'BUY' 
+            ? (match.exit - match.entry) 
+            : (match.entry - match.exit);
+          const newRR = risk > 0 ? round2(reward / risk) : 0;
+          
+          // Use calculated RR (always recalculate from entry/exit/stop)
+          match.rr = newRR;
+          match.pts = round2(reward);
+          match.ret = round2(match.rr * 10);
+          
+          // If trade was pending, mark as triggered
+          if (!match.triggered) {
+            match.triggered = true;
+            match.rawTriggered = true;
+            match.st = 'live';
+          }
+          
+          applied++;
+        }
+      }
+      if (applied > 0) console.log(`[API-SYNC] Applied ${applied}/${dbOverrides.length} overrides from database`);
+    }
 
     // Build dashboard data
     cachedData = buildDashboardData(trades, baseData);
@@ -1022,13 +1091,15 @@ function getLastSyncTime() {
   return lastSyncTime;
 }
 
-function startAutoSync() {
+function startAutoSync(getOverrides) {
   // Initial sync
-  syncData().catch(err => console.error('[API-SYNC] Initial sync error:', err));
+  const ovs = getOverrides ? getOverrides() : [];
+  syncData(ovs).catch(err => console.error('[API-SYNC] Initial sync error:', err));
 
   // Periodic sync
   setInterval(() => {
-    syncData().catch(err => console.error('[API-SYNC] Periodic sync error:', err));
+    const ovs2 = getOverrides ? getOverrides() : [];
+    syncData(ovs2).catch(err => console.error('[API-SYNC] Periodic sync error:', err));
   }, SYNC_INTERVAL);
 
   console.log(`[API-SYNC] Auto-sync started. Interval: ${SYNC_INTERVAL / 3600000}h`);

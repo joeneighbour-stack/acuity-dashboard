@@ -165,7 +165,8 @@ app.get('/api/data', requireAuth, (req, res) => {
 // Manual sync trigger (admin only)
 app.post('/api/sync', requireAdmin, async (req, res) => {
   try {
-    const data = await syncData();
+    const overrides = db.prepare('SELECT * FROM overrides').all();
+    const data = await syncData(overrides);
     res.json({
       success: true,
       trades: data.o.trades,
@@ -270,7 +271,7 @@ app.get('/api/overrides', requireAuth, (req, res) => {
 });
 
 // POST a new override (admin only)
-app.post('/api/overrides', requireAdmin, (req, res) => {
+app.post('/api/overrides', requireAdmin, async (req, res) => {
   const { trade_id, sym, an, dir, d, entry, exit_val, rr } = req.body;
   if (!sym || !an || !dir) return res.status(400).json({ error: 'sym, an, dir required' });
   const overriddenBy = req.session.user.display_name || req.session.user.username;
@@ -282,12 +283,20 @@ app.post('/api/overrides', requireAdmin, (req, res) => {
   // Mark matching flag as resolved
   db.prepare("UPDATE flags SET status = 'resolved' WHERE sym = ? AND an = ? AND dir = ? AND (d = ? OR d IS NULL)").run(sym, an, dir, d || null);
   res.json({ success: true });
+  
+  // Re-sync in background so all stats recalculate with the override applied
+  const allOverrides = db.prepare('SELECT * FROM overrides').all();
+  syncData(allOverrides).catch(err => console.error('[API-SYNC] Post-override sync error:', err));
 });
 
 // DELETE an override (admin only)
 app.delete('/api/overrides/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM overrides WHERE id = ?').run(req.params.id);
   res.json({ success: true });
+  
+  // Re-sync to recalculate stats without this override
+  const allOverrides = db.prepare('SELECT * FROM overrides').all();
+  syncData(allOverrides).catch(err => console.error('[API-SYNC] Post-delete-override sync error:', err));
 });
 
 // ===== ANALYST DATA FILTERING =====
@@ -445,6 +454,8 @@ app.listen(PORT, () => {
   });
   console.log('Analyst accounts ready');
 
-  // Start API auto-sync
-  startAutoSync();
+  // Start API auto-sync (pass function to get current overrides from DB)
+  startAutoSync(function() {
+    return db.prepare('SELECT * FROM overrides').all();
+  });
 });
