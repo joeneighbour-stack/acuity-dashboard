@@ -1098,7 +1098,9 @@ async function syncData(dbOverrides) {
 
     // Fetch from API: 2022 to today
     const today = new Date();
-    const toDate = today.toISOString().substring(0, 10);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const toDate = tomorrow.toISOString().substring(0, 10);
     const rawRows = await fetchTrades(API_START_DATE, toDate);
 
     // Clean and transform

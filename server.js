@@ -119,7 +119,15 @@ app.post('/api/logout', (req, res) => { req.session.destroy(); res.json({ succes
 app.get('/api/me', requireAuth, (req, res) => { res.json({ user: req.session.user }); });
 
 // ===== DATA =====
-app.get('/api/data', requireAuth, (req, res) => {
+app.get('/api/data', requireAuth, async (req, res) => {
+  // Trigger a fresh sync on each page load
+  try {
+    const overrides = await dbAll('SELECT * FROM overrides');
+    await syncData(overrides);
+  } catch (err) {
+    console.error('[API-SYNC] On-load sync error:', err.message);
+  }
+  
   const D = getCachedData();
   if (!D) {
     const dataPath = path.join(__dirname, 'data', 'dashboard_data.json');
