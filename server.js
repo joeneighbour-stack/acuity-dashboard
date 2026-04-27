@@ -297,8 +297,8 @@ function filterForAnalyst(D, aid) {
     const totalRR = Math.round(myMpnl.reduce((s, p) => s + p.rr, 0) * 10) / 10;
     F.o = {
       trades: totalN, wins: totalW, losses: totalN - totalW,
-      wr: totalN > 0 ? Math.round(totalW / totalN * 1000) / 10 : 0,
-      rr: totalRR,
+      winRate: totalN > 0 ? Math.round(totalW / totalN * 1000) / 10 : 0,
+      sumRR: totalRR,
       fixedReturn: Math.round((eqF / 10 - 100) * 100) / 100,
       sizedReturn: Math.round((eqS / 10 - 100) * 100) / 100,
       fixedDD: Math.round(maxDDF * 100) / 100,
@@ -385,6 +385,67 @@ function filterForAnalyst(D, aid) {
   // Clear global mde and mdc so MonthDrill falls back to analyst-specific md.eq from amd
   F.mde = {};
   F.mdc = {};
+
+  // Rebuild SR (asset rankings) from analyst's trades in dd
+  if (F.dd) {
+    const symRRAll = {};
+    const symRRByYr = {};
+    Object.entries(F.dd).forEach(([dateStr, dayData]) => {
+      const yr = dateStr.substring(0, 4);
+      (dayData.t || []).forEach(t => {
+        if (t.st === 'live') {
+          if (!symRRAll[t.sym]) symRRAll[t.sym] = { n: 0, w: 0, rr: 0 };
+          symRRAll[t.sym].n++; if (t.rr > 0) symRRAll[t.sym].w++;
+          symRRAll[t.sym].rr = Math.round((symRRAll[t.sym].rr + t.rr) * 10) / 10;
+          if (!symRRByYr[yr]) symRRByYr[yr] = {};
+          if (!symRRByYr[yr][t.sym]) symRRByYr[yr][t.sym] = { n: 0, w: 0, rr: 0 };
+          symRRByYr[yr][t.sym].n++; if (t.rr > 0) symRRByYr[yr][t.sym].w++;
+          symRRByYr[yr][t.sym].rr = Math.round((symRRByYr[yr][t.sym].rr + t.rr) * 10) / 10;
+        }
+      });
+    });
+    // Also add from mpnl-era ss data if available (pre-API base has ss per symbol)
+    // For now, sr from dd covers the last 30 days only, which is limited
+    // Better: rebuild from analyst's rec data which has more history
+  }
+
+  // Rebuild SR from rec (recent trades - last 30 days per analyst)
+  if (F.rec && F.rec[aid]) {
+    const symRRAnal = {};
+    F.rec[aid].forEach(t => {
+      if (t.st === 'live' || t.rr !== 0) {
+        if (!symRRAnal[t.sym]) symRRAnal[t.sym] = { n: 0, w: 0, rr: 0 };
+        symRRAnal[t.sym].n++; if (t.rr > 0) symRRAnal[t.sym].w++;
+        symRRAnal[t.sym].rr = Math.round((symRRAnal[t.sym].rr + t.rr) * 10) / 10;
+      }
+    });
+    // Use ss (symbol stats) which is already built per-analyst in api-sync but not filtered here
+    // Actually ss is global - we need to keep it as-is for Asset Drill which uses D.ss
+    // For the rankings we'll use what we can from the mpnl period
+  }
+
+  // Best approach: use the analyst's AM data to rebuild all-time sr
+  // The AM doesn't have per-symbol data but the ss (setup stats) does per-analyst breakdowns
+  // For now, filter the global sr to only include symbols the analyst has traded
+  // This at least shows their personal RR per symbol
+  if (F.ss) {
+    // ss has per-analyst breakdown in .ba array
+    const mySymRR = {};
+    Object.entries(F.ss).forEach(([sym, data]) => {
+      if (data.ba) {
+        const myBA = data.ba.find(b => b.a === aid);
+        if (myBA && myBA.n > 0) {
+          mySymRR[sym] = { s: sym, c: data.cat || '', n: myBA.n, w: myBA.w, wr: Math.round(myBA.w / myBA.n * 1000) / 10, rr: myBA.rr };
+        }
+      }
+    });
+    const mySorted = Object.values(mySymRR).sort((a, b) => b.rr - a.rr);
+    F.sr = { all: mySorted };
+    // Add year breakdowns from yr
+    if (F.yr) {
+      F.yr.forEach(y => { F.sr[y.y] = mySorted; }); // same data for now
+    }
+  }
 
   if (F.am) { const my = F.am[aid] || []; F.am = {}; F.am[aid] = my; }
   if (F.aeq) { const my = F.aeq[aid] || []; F.aeq = {}; F.aeq[aid] = my; }
