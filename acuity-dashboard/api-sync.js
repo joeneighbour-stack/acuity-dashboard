@@ -15,7 +15,10 @@ const path = require('path');
 const API_URL = process.env.TRADE_API_URL || 'https://n8n.srv1104653.hstgr.cloud/webhook/624da439-ad1f-40a5-bc82-f011a54af377';
 const API_USER = process.env.TRADE_API_USER || 'product';
 const API_PASS = process.env.TRADE_API_PASS || 'barcelona123';
-const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_HOURS || '6') * 60 * 60 * 1000;
+const SYNC_INTERVAL_ACTIVE = 30 * 60 * 1000; // 30 minutes during active hours
+const SYNC_INTERVAL_CHECK = 5 * 60 * 1000; // Check every 5 minutes if we're in active window
+const ACTIVE_START = parseInt(process.env.SYNC_ACTIVE_START || '6'); // 6am UTC
+const ACTIVE_END = parseInt(process.env.SYNC_ACTIVE_END || '21'); // 9pm UTC
 const API_START_DATE = '2022-01-01'; // API has reliable data from 2022+ (2021 is incomplete)
 
 // ===== SYMBOL MAPPING =====
@@ -540,13 +543,18 @@ function buildDashboardData(trades, baseData) {
   const allYr = [...baseYr, ...apiYearSummary];
 
   // ===== SM/SD (Seasonality - month/day) =====
-  const sm = Array(12).fill(null).map((_, i) => ({ n: MN[i], v: 0 }));
-  const sd = [{ n: 'Mon', v: 0 }, { n: 'Tue', v: 0 }, { n: 'Wed', v: 0 }, { n: 'Thu', v: 0 }, { n: 'Fri', v: 0 }];
-  allMpnl.forEach(p => {
+  // Start with base data values, then add API contributions
+  const baseSM = baseData.sm || Array(12).fill(null).map((_, i) => ({ n: MN[i], v: 0 }));
+  const baseSD = baseData.sd || [{ n: 'Mon', v: 0 }, { n: 'Tue', v: 0 }, { n: 'Wed', v: 0 }, { n: 'Thu', v: 0 }, { n: 'Fri', v: 0 }];
+  const sm = baseSM.map(s => ({ n: s.n, v: s.v }));
+  const sd = baseSD.map(s => ({ n: s.n, v: s.v }));
+  
+  // Add API monthly RR to seasonals
+  apiMpnl.forEach(p => {
     const mi = parseInt(p.m.slice(5)) - 1;
-    sm[mi].v = round1(sm[mi].v + p.rr);
+    if (mi >= 0 && mi < 12) sm[mi].v = round1(sm[mi].v + p.rr);
   });
-  // Day of week from API trades only
+  // Add API day-of-week RR
   for (const t of allTrig) {
     const d = t.dow;
     if (d >= 1 && d <= 5) sd[d - 1].v = round1(sd[d - 1].v + t.rr);
@@ -649,17 +657,15 @@ function buildDashboardData(trades, baseData) {
       const w5 = sortedA.slice(-5).reverse().map(([s, r]) => ({ s, rr: round1(r) })).reverse();
 
       // Daily equity for this analyst
-      const dayMapA = {};
+      let eqA2 = 1000;
+      const eqPoints = [{ d: 0, eq: 1000 }];
       for (const dk of Object.keys(dayRRA).sort()) {
-        if (!dayMapA._eq) dayMapA._eq = 1000;
-        dayMapA._eq += dayRRA[dk] * 10;
+        eqA2 += dayRRA[dk] * 10;
         const dayNum = parseInt(dk.substring(8, 10));
-        dayMapA[dayNum] = Math.round(dayMapA._eq);
+        eqPoints.push({ d: dayNum, eq: Math.round(eqA2) });
       }
-      delete dayMapA._eq;
-      const eqA = Object.entries(dayMapA).map(([d, e]) => ({ d: parseInt(d), eq: e }));
 
-      amd[a][m] = { lb, b5, w5, eq: eqA, tgr: tgrV };
+      amd[a][m] = { lb, b5, w5, eq: eqPoints, tgr: tgrV };
     }
   });
 
@@ -1154,7 +1160,7 @@ function getLastSyncTime() {
 }
 
 function startAutoSync(getOverrides) {
-  // Initial sync - await the overrides from database
+  // Initial sync
   (async () => {
     try {
       const ovs = getOverrides ? await getOverrides() : [];
@@ -1164,17 +1170,27 @@ function startAutoSync(getOverrides) {
     }
   })();
 
-  // Periodic sync
+  // Smart scheduling: sync every 30 min during active hours, skip overnight
+  let lastSyncAt = Date.now();
+  
   setInterval(async () => {
-    try {
-      const ovs2 = getOverrides ? await getOverrides() : [];
-      await syncData(ovs2);
-    } catch (err) {
-      console.error('[API-SYNC] Periodic sync error:', err);
+    const now = new Date();
+    const hour = now.getUTCHours();
+    const isActive = hour >= ACTIVE_START && hour < ACTIVE_END;
+    const elapsed = Date.now() - lastSyncAt;
+    
+    if (isActive && elapsed >= SYNC_INTERVAL_ACTIVE) {
+      try {
+        const ovs2 = getOverrides ? await getOverrides() : [];
+        await syncData(ovs2);
+        lastSyncAt = Date.now();
+      } catch (err) {
+        console.error('[API-SYNC] Periodic sync error:', err);
+      }
     }
-  }, SYNC_INTERVAL);
+  }, SYNC_INTERVAL_CHECK);
 
-  console.log(`[API-SYNC] Auto-sync started. Interval: ${SYNC_INTERVAL / 3600000}h`);
+  console.log(`[API-SYNC] Auto-sync started. Every 30min during ${ACTIVE_START}:00-${ACTIVE_END}:00 UTC`);
 }
 
 module.exports = { syncData, getCachedData, getLastSyncTime, startAutoSync };
