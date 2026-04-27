@@ -781,9 +781,11 @@ function Schedule(props){
     return ACTIVE.filter(function(a){return isOff(a,day);});
   }
 
+  var today=new Date().toISOString().slice(0,10);
   var activeRealloc={};
   ACTIVE.forEach(function(a){activeRealloc[a]=[];});
-  (props.holidays||[]).forEach(function(h){
+  // Only apply reallocation for holidays that are active TODAY
+  (props.holidays||[]).filter(function(h){return today>=h.from&&today<=h.to;}).forEach(function(h){
     var ra=realloc[h.analyst];if(!ra)return;
     Object.keys(ra).forEach(function(to){
       ra[to].forEach(function(sym){
@@ -792,7 +794,6 @@ function Schedule(props){
     });
   });
 
-  var today=new Date().toISOString().slice(0,10);
   var offToday=(props.holidays||[]).filter(function(h){return today>=h.from&&today<=h.to;});
   return(<div>
     <Hd t="Analyst Coverage & Schedule"/>
