@@ -247,57 +247,8 @@ app.delete('/api/holidays/:id', requireAuth, async (req, res) => {
 // ===== ANALYST DATA FILTERING =====
 function filterForAnalyst(D, aid) {
   const F = JSON.parse(JSON.stringify(D));
-  
-  // Replace month drill with analyst-specific data
-  if (F.amd && F.amd[aid]) {
-    const myAmd = F.amd[aid];
-    Object.keys(F.md || {}).forEach(k => {
-      if (myAmd[k]) F.md[k] = myAmd[k];
-      else if (F.md[k] && F.md[k].lb) F.md[k].lb = [];
-    });
-  } else if (F.md) {
-    Object.keys(F.md).forEach(k => { if (F.md[k] && F.md[k].lb) F.md[k].lb = []; });
-  }
-  delete F.amd;
-
-  // Replace mpnl with analyst's own monthly data
-  if (F.am && F.am[aid]) {
-    F.mpnl = F.am[aid].map(m => ({
-      m: '20' + m.m.substring(0, 2) + '-' + m.m.substring(3, 5),
-      mu: m.mu, ret: m.ret, n: m.n, w: m.w, wr: m.wr,
-      dd: m.dd, rr: m.rr, tgr: m.tgr, y: '20' + m.m.substring(0, 2)
-    }));
-  }
-
-  // Clear mde and mdc for analyst (falls back to md.eq from amd)
-  F.mde = {};
-  F.mdc = {};
-
-  // Filter DD to analyst's trades only
-  if (F.dd) {
-    Object.keys(F.dd).forEach(k => {
-      if (F.dd[k] && F.dd[k].t) {
-        F.dd[k].t = F.dd[k].t.filter(t => t.an === aid);
-      }
-    });
-  }
-
-  // Filter DP to analyst's trades
-  if (F.dp && F.dd) {
-    F.dp = F.dp.map(day => {
-      const ddDay = F.dd[day.d];
-      if (!ddDay || !ddDay.t) return day;
-      const live = ddDay.t.filter(t => t.st === 'live');
-      return {
-        d: day.d, n: live.length,
-        w: live.filter(t => t.rr > 0).length,
-        rr: Math.round(live.reduce((s, t) => s + t.rr, 0) * 100) / 100,
-        tgr: ddDay.t.length > 0 ? Math.round(live.length / ddDay.t.length * 1000) / 10 : 0,
-        nl: live.length, np: ddDay.t.length - live.length
-      };
-    });
-  }
-
+  // Hide other analyst names from month drill leaderboard
+  if (F.md) Object.keys(F.md).forEach(k => { if (F.md[k] && F.md[k].lb) F.md[k].lb = []; });
   // Filter per-analyst data
   if (F.am) { const my = F.am[aid] || []; F.am = {}; F.am[aid] = my; }
   if (F.aeq) { const my = F.aeq[aid] || []; F.aeq = {}; F.aeq[aid] = my; }

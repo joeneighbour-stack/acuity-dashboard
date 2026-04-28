@@ -882,31 +882,13 @@ function buildDashboardData(trades, baseData) {
     const totalW = (baseSS ? baseSS.n * baseSS.wr / 100 : 0) + w;
     const totalRR = (baseSS ? baseSS.rr : 0) + rr;
 
-    // Merge ba with base per-analyst data
-    const mergedBaMap = {};
-    if (baseSS && baseSS.ba) {
-      baseSS.ba.forEach(b => { mergedBaMap[b.a] = { n: b.n, w: b.w, rr: b.rr }; });
-    }
-    ba.forEach(b => {
-      if (mergedBaMap[b.a]) {
-        mergedBaMap[b.a].n += b.n;
-        mergedBaMap[b.a].w += b.w;
-        mergedBaMap[b.a].rr = round1(mergedBaMap[b.a].rr + b.rr);
-      } else {
-        mergedBaMap[b.a] = { n: b.n, w: b.w, rr: b.rr };
-      }
-    });
-    const mergedBa = Object.entries(mergedBaMap)
-      .map(([a, d]) => ({ a, n: d.n, w: d.w, wr: round1(d.w / d.n * 100), rr: d.rr }))
-      .sort((x, y) => y.rr - x.rr);
-
     ss[sym] = {
       n: totalN,
       w: Math.round(totalW),
       wr: totalN > 0 ? round1(totalW / totalN * 100) : 0,
       rr: round1(totalRR),
       eq: baseSS ? [...(baseSS.eq || []), ...eqPoints] : eqPoints,
-      ba: mergedBa,
+      ba: ba,
       yr: baseSS ? [...(baseSS.yr || []).filter(y => !yr2.find(y2 => y2.y === y.y)), ...yr2] : yr2,
     };
   });
@@ -1107,7 +1089,6 @@ function buildDashboardData(trades, baseData) {
     dp: dp,
     ad: ad,
     md: md,
-    amd: amd,
     dd: dd,
     aeq: aeq,
     cov: cov,
