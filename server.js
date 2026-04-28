@@ -254,7 +254,6 @@ app.delete('/api/holidays/:id', requireAuth, async (req, res) => {
 
 // ===== ANALYST DATA FILTERING =====
 function filterForAnalyst(D, aid) {
-  const baseData_eq = D.eq ? JSON.parse(JSON.stringify(D.eq)) : [];
   const F = JSON.parse(JSON.stringify(D));
   
   // Replace global month drill with analyst-specific data
@@ -286,28 +285,19 @@ function filterForAnalyst(D, aid) {
 
   // Rebuild equity curve from analyst's mpnl
   if (myMpnl.length > 0) {
-    // Use pre-built daily-compounded equity curve for this analyst
-    const baseEqA = (baseData_eq || []).filter(e => parseInt(e.d.substring(0, 4)) < 2022);
-    const apiEqA = (F.afeq && F.afeq[aid]) ? F.afeq[aid] : [];
-    F.eq = [...baseEqA, ...apiEqA];
-    if (F.eq.length === 0) {
-      // Fallback: build from mpnl
-      let ef2 = 1000, es2 = 1000;
-      myMpnl.forEach(p => {
-        ef2 = Math.round(ef2 * (1 + p.ret / 100) * 100) / 100;
-        es2 = Math.round(es2 * (1 + p.rr / 100) * 100) / 100;
-        F.eq.push({ d: p.m, f: Math.round(ef2), s: Math.round(es2) });
-      });
-    }
-
-    let peakF = 1000, peakS = 1000, maxDDF = 0, maxDDS = 0;
-    F.eq.forEach(e => {
-      if (e.f > peakF) peakF = e.f;
-      if (e.s > peakS) peakS = e.s;
-      const ddF = peakF > 0 ? (peakF - e.f) / peakF * 100 : 0;
-      const ddS = peakS > 0 ? (peakS - e.s) / peakS * 100 : 0;
+    // Build equity curve from analyst's monthly data
+    let eqF = 1000, eqS = 1000, peakF = 1000, peakS = 1000, maxDDF = 0, maxDDS = 0;
+    F.eq = [];
+    myMpnl.forEach(p => {
+      eqF = Math.round(eqF * (1 + p.ret / 100) * 100) / 100;
+      eqS = Math.round(eqS * (1 + p.rr / 100) * 100) / 100;
+      if (eqF > peakF) peakF = eqF;
+      if (eqS > peakS) peakS = eqS;
+      const ddF = peakF > 0 ? (peakF - eqF) / peakF * 100 : 0;
+      const ddS = peakS > 0 ? (peakS - eqS) / peakS * 100 : 0;
       if (ddF > maxDDF) maxDDF = ddF;
       if (ddS > maxDDS) maxDDS = ddS;
+      F.eq.push({ d: p.m, f: Math.round(eqF), s: Math.round(eqS) });
     });
     const lastF = F.eq.length > 0 ? F.eq[F.eq.length - 1].f : 1000;
     const lastS = F.eq.length > 0 ? F.eq[F.eq.length - 1].s : 1000;
@@ -483,7 +473,6 @@ function filterForAnalyst(D, aid) {
   // Keep cov (coverage) unfiltered - Schedule needs all analysts' markets
   // if (F.cov) - deliberately NOT filtering
   if (F.a) F.a = F.a.filter(a => a.id === aid);
-  delete F.afeq;
   F._role = 'analyst';
   F._analyst_id = aid;
   return F;

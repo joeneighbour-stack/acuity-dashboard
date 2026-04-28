@@ -358,62 +358,24 @@ function buildDashboardData(trades, baseData) {
   const totalWins = baseOverview.wins + apiWins;
   const totalSumRR = round1(baseOverview.sumRR + apiSumRR);
 
-  // Compute equity curve from DAILY compounded returns
-  // 1. Sum all RR per day across all triggered trades
-  // 2. Compound daily: Fixed R uses rr*1% per day, Sized R uses rr*1% of current equity
-  allTrig.sort((a, b) => a.date.localeCompare(b.date));
-  const dailyRR = {};
-  const dailyCount = {};
-  for (const t of allTrig) {
-    const day = t.date.substring(0, 10);
-    dailyRR[day] = (dailyRR[day] || 0) + t.rr;
-    dailyCount[day] = (dailyCount[day] || 0) + 1;
-  }
-  const sortedTradeDays = Object.keys(dailyRR).sort();
-
+  // Compute equity curve from monthly returns
+  // Fixed R: compound monthly ret
+  // Sized R: compound monthly rr
   let eqF = 1000, eqS = 1000, peakF = 1000, peakS = 1000, maxDDF = 0, maxDDS = 0;
   const eqCurve = [];
-  const dailyRets = [];
-  let prevMonth = '';
-
-  for (const day of sortedTradeDays) {
-    const rr = dailyRR[day];
-    // Fixed R: each day's return = sum_rr * 1% of INITIAL capital
-    // equity += rr * 10 (1% of 1000)
-    eqF = round2(eqF + rr * 10);
-    // Sized R: each day's return = sum_rr * 1% of CURRENT equity  
-    // equity *= (1 + rr * 0.01)
-    eqS = round2(eqS * (1 + rr * 0.01));
-
+  const monthRets = [];
+  allMpnl.forEach(p => {
+    eqF = round2(eqF * (1 + p.ret / 100));
+    eqS = round2(eqS * (1 + p.rr / 100));
     if (eqF > peakF) peakF = eqF;
     if (eqS > peakS) peakS = eqS;
     const ddF = peakF > 0 ? (peakF - eqF) / peakF * 100 : 0;
     const ddS = peakS > 0 ? (peakS - eqS) / peakS * 100 : 0;
     if (ddF > maxDDF) maxDDF = ddF;
     if (ddS > maxDDS) maxDDS = ddS;
-
-    // Record one equity point per month for the chart (to keep it manageable)
-    const month = day.substring(0, 7);
-    if (month !== prevMonth) {
-      if (prevMonth) {
-        // Push the previous month's final equity
-        eqCurve.push({ d: prevMonth, f: Math.round(eqF), s: Math.round(eqS) });
-      }
-      prevMonth = month;
-    }
-    dailyRets.push(rr);
-  }
-  // Push the last month
-  if (prevMonth) {
-    eqCurve.push({ d: prevMonth, f: Math.round(eqF), s: Math.round(eqS) });
-  }
-
-  // Also prepend base equity curve points (pre-API period)
-  const baseEq = (baseData.eq || []).filter(e => parseInt(e.d.substring(0, 4)) < apiStartYear);
-  const fullEqCurve = [...baseEq, ...eqCurve];
-
-  // Monthly returns for Sharpe calculation (from mpnl)
-  const monthRets = allMpnl.map(p => p.ret);
+    monthRets.push(p.ret);
+    eqCurve.push({ d: p.m, f: Math.round(eqF), s: Math.round(eqS) });
+  });
 
   // Win/loss streaks
   let ws = 0, ls = 0, maxWS = 0, maxLS = 0;
@@ -1138,7 +1100,7 @@ function buildDashboardData(trades, baseData) {
     n: NAMES,
     sm: sm,
     sd: sd,
-    eq: fullEqCurve,
+    eq: eqCurve,
     mpnl: allMpnl,
     am: am,
     rec: rec,
@@ -1148,7 +1110,6 @@ function buildDashboardData(trades, baseData) {
     amd: amd,
     dd: dd,
     aeq: aeq,
-    afeq: analystFullEq,
     cov: cov,
     ss: ss,
     yr: allYr,
