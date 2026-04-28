@@ -17,13 +17,108 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
 </head>
 <body>
 <div id="root"><div class="loading">Loading dashboard...</div></div>
 <script type="text/babel">
 const { useState, useMemo, useEffect } = React;
-const { XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, CartesianGrid, Area, AreaChart, ReferenceLine, ComposedChart } = Recharts;
+// Plotly loaded globally as window.Plotly
+
+
+function EqCurveChart(props){
+  var ref=React.useRef(null);
+  var eqData=props.eq||[];
+  var[range,setRange]=useState("all");
+  var dates=eqData.map(function(e){return e.d+"-01";});
+  var fVals=eqData.map(function(e){return e.f;});
+  var sVals=eqData.map(function(e){return e.s;});
+  var rrVals=(D.mpnl||[]).map(function(p){return{d:p.m+"-01",rr:p.rr};});
+
+  var startIdx=0;
+  if(range!=="all"&&dates.length>0){
+    var now=new Date();var cutoff=new Date(now);
+    if(range==="1m")cutoff.setMonth(now.getMonth()-1);
+    else if(range==="3m")cutoff.setMonth(now.getMonth()-3);
+    else if(range==="6m")cutoff.setMonth(now.getMonth()-6);
+    else if(range==="1y")cutoff.setFullYear(now.getFullYear()-1);
+    else if(range==="3y")cutoff.setFullYear(now.getFullYear()-3);
+    for(var i=0;i<dates.length;i++){if(new Date(dates[i])>=cutoff){startIdx=i;break;}}
+    if(startIdx>=dates.length)startIdx=Math.max(0,dates.length-2);
+  }
+
+  var slicedDates=dates.slice(startIdx);
+  var baseF=fVals[startIdx]||1000;var baseS=sVals[startIdx]||1000;
+  var rf=fVals.slice(startIdx).map(function(v){return Math.round((v/baseF-1)*10000)/100;});
+  var rs=sVals.slice(startIdx).map(function(v){return Math.round((v/baseS-1)*10000)/100;});
+
+  var tradeRR=rrVals.filter(function(r){return slicedDates.indexOf(r.d)>=0;}).map(function(r){return r.rr;});
+  var tradeDates=rrVals.filter(function(r){return slicedDates.indexOf(r.d)>=0;}).map(function(r){return r.d;});
+  if(tradeDates.length===0){tradeDates=slicedDates;tradeRR=slicedDates.map(function(){return 0;});}
+
+  useEffect(function(){
+    if(!ref.current||slicedDates.length===0)return;
+    var traces=[
+      {x:tradeDates,y:tradeRR,name:"Trades (RR)",type:"bar",marker:{color:tradeRR.map(function(v){return v>0?"rgba(34,197,131,0.25)":"rgba(224,72,72,0.25)";})},yaxis:"y2",hovertemplate:"%{x|%b %Y}: %{y:.1f} RR<extra>Trades</extra>"},
+      {x:slicedDates,y:rf,name:"Fixed R",type:"scatter",mode:"lines",line:{color:"#4A90D9",width:2.5,shape:"spline"},connectgaps:true,hovertemplate:"%{x|%b %Y}: %{y:.1f}%<extra>Fixed R</extra>"},
+      {x:slicedDates,y:rs,name:"Sized R",type:"scatter",mode:"lines",line:{color:"#1a5fb4",width:2.5,shape:"spline"},connectgaps:true,hovertemplate:"%{x|%b %Y}: %{y:,.1f}%<extra>Sized R</extra>"}
+    ];
+    var layout={
+      paper_bgcolor:"transparent",plot_bgcolor:P.bg,
+      font:{family:"system-ui,-apple-system,sans-serif",color:P.td,size:11},
+      margin:{t:30,r:50,b:36,l:56},hovermode:"x unified",
+      hoverlabel:{bgcolor:"#1a1a1a",bordercolor:"#3d3d3d",font:{color:"#ffffff",size:12}},
+      title:{text:"Cumulative Returns",font:{size:13,color:P.tx},x:0.5,y:0.98},
+      legend:{x:0.01,y:0.98,bgcolor:"transparent",font:{size:10,color:P.td}},
+      xaxis:{type:"date",gridcolor:P.bd,showline:false,tickformat:"%b %y",tickfont:{size:9}},
+      yaxis:{title:{text:"Return %",font:{size:10,color:"#4A90D9"}},gridcolor:P.bd,showline:false,ticksuffix:"%",zeroline:true,zerolinecolor:P.bd},
+      yaxis2:{title:{text:"Trade RR",font:{size:10,color:P.td}},overlaying:"y",side:"right",showgrid:false,showline:false,zeroline:false},
+      bargap:0.1
+    };
+    Plotly.react(ref.current,traces,layout,{responsive:true,displayModeBar:false,displaylogo:false});
+    return function(){if(ref.current)Plotly.purge(ref.current);};
+  },[range,eqData]);
+
+  var btnStyle=function(r){return{padding:"4px 10px",background:range===r?P.ac:"transparent",border:"1px solid "+(range===r?P.ac:P.bd),color:range===r?"#1a1a1a":P.td,borderRadius:5,cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:range===r?700:400};};
+  return React.createElement("div",null,
+    React.createElement("div",{style:{display:"flex",gap:4,marginBottom:8}},
+      React.createElement("button",{onClick:function(){setRange("1m");},style:btnStyle("1m")},"1M"),
+      React.createElement("button",{onClick:function(){setRange("3m");},style:btnStyle("3m")},"3M"),
+      React.createElement("button",{onClick:function(){setRange("6m");},style:btnStyle("6m")},"6M"),
+      React.createElement("button",{onClick:function(){setRange("1y");},style:btnStyle("1y")},"1Y"),
+      React.createElement("button",{onClick:function(){setRange("3y");},style:btnStyle("3y")},"3Y"),
+      React.createElement("button",{onClick:function(){setRange("all");},style:btnStyle("all")},"All")
+    ),
+    React.createElement("div",{ref:ref,style:{width:"100%",height:280}})
+  );
+}
+
+
+
+function PlotlyChart(props){
+  var ref=React.useRef(null);
+  useEffect(function(){
+    if(!ref.current||!props.data)return;
+    var isDark=true;
+    var layout=Object.assign({
+      paper_bgcolor:"transparent",
+      plot_bgcolor:P.bg,
+      font:{family:"system-ui,-apple-system,sans-serif",color:P.td,size:11},
+      margin:{t:8,r:12,b:36,l:44},
+      hovermode:"x unified",
+      hoverlabel:{bgcolor:"#1a1a1a",bordercolor:"#3d3d3d",font:{color:"#ffffff",family:"system-ui,-apple-system,sans-serif",size:12}},
+      xaxis:{gridcolor:P.bd,showline:false,zeroline:false},
+      yaxis:{gridcolor:P.bd,showline:false,zeroline:false}
+    },props.layout||{});
+    var config={responsive:true,displayModeBar:false,displaylogo:false};
+    if(props.modeBar)config.displayModeBar=true;
+    if(props.config)Object.assign(config,props.config);
+    Plotly.newPlot(ref.current,props.data,layout,config);
+    return function(){if(ref.current)Plotly.purge(ref.current);};
+  },[props.data,props.layout]);
+  return React.createElement("div",{ref:ref,style:Object.assign({width:"100%",height:props.height||180},props.style||{})});
+}
+
 
 var D = null;
 
@@ -244,10 +339,7 @@ function Overview(props){
       </div>
     </div>
     <div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:280,marginBottom:20}}>
-      <ResponsiveContainer><AreaChart data={D.eq}><defs><linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.cy} stopOpacity={0.2}/><stop offset="95%" stopColor={P.cy} stopOpacity={0}/></linearGradient><linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.pu} stopOpacity={0.15}/><stop offset="95%" stopColor={P.pu} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="d" tick={{fontSize:8,fill:P.td}} axisLine={false} tickLine={false} interval={3} label={{value:"Date",position:"insideBottom",offset:-2,fontSize:9,fill:P.td}}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} scale="log" domain={["auto","auto"]} label={{value:eqMode==="sized"?"Sized Return":"Fixed Return",angle:-90,position:"insideLeft",fontSize:9,fill:P.td}}/><Tooltip {...TT}/>
-        {eqMode!=="sized"?<Area type="monotone" dataKey="f" name="Fixed R" stroke={P.cy} fill="url(#gF)" strokeWidth={2} dot={false}/>:null}
-        {eqMode!=="fixed"?<Area type="monotone" dataKey="s" name="Sized R" stroke={P.pu} fill="url(#gS)" strokeWidth={eqMode==="both"?1.5:2} dot={false}/>:null}
-      </AreaChart></ResponsiveContainer>
+      <EqCurveChart eq={D.eq}/>
     </div>
     <Hd t="Performance Breakdown"/>
     <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
@@ -255,7 +347,7 @@ function Overview(props){
       {years.map(function(y){return <Btn key={y.y} on={function(){setChartYr(y.y);}} active={chartYr===y.y}>{y.y}</Btn>;})}
     </div>
     <div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:200,marginBottom:16}}>
-      <ResponsiveContainer><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="mu" tick={{fontSize:7,fill:P.td}} axisLine={false} tickLine={false} interval={chartYr==="all"?8:0}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="rr" name="Sum RR" radius={[3,3,0,0]}>{chartData.map(function(e,i){return <Cell key={i} fill={e.rr>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer>
+      <PlotlyChart height={200} data={[{x:chartData.map(function(e){return e.mu;}),y:chartData.map(function(e){return e.rr;}),type:"bar",marker:{color:chartData.map(function(e){return e.rr>0?P.gn:P.rd;})},hovertemplate:"%{x}: %{y:.1f} RR<extra></extra>"}]} layout={{margin:{t:8,r:12,b:40,l:44},xaxis:{tickfont:{size:chartYr==="all"?7:9},tickangle:chartYr==="all"?-45:0},yaxis:{gridcolor:P.bd}}}/>
     </div>
     {chartYr!=="all"?<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
       <Th k="mu" sk={sOv.sort} tog={sOv.tog}>MONTH</Th><Th k="n" sk={sOv.sort} tog={sOv.tog} a="right">TRADES</Th><Th k="wr" sk={sOv.sort} tog={sOv.tog} a="right">WIN%</Th><Th k="ret" sk={sOv.sort} tog={sOv.tog} a="right">RETURN</Th><Th k="dd" sk={sOv.sort} tog={sOv.tog} a="right">DD</Th><Th k="rr" sk={sOv.sort} tog={sOv.tog} a="right">RR</Th>
@@ -267,8 +359,8 @@ function Overview(props){
       <td style={{padding:5,textAlign:"right",fontWeight:700,color:p.rr>0?P.gn:P.rd}}>{fm(p.rr)}</td>
     </tr>);})}</tbody></table></div>:null}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:16}}>
-      <div><Hd t="Monthly Seasonals"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180}}><ResponsiveContainer><BarChart data={D.sm}><XAxis dataKey="n" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="RR" radius={[3,3,0,0]}>{D.sm.map(function(e,i){return <Cell key={i} fill={e.v>80?P.gn:e.v>30?P.ac:P.am}/>;})}</Bar></BarChart></ResponsiveContainer></div></div>
-      <div><Hd t="Day of Week"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180}}><ResponsiveContainer><BarChart data={D.sd}><XAxis dataKey="n" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="RR" radius={[3,3,0,0]}>{D.sd.map(function(e,i){return <Cell key={i} fill={e.v>150?P.gn:P.ac}/>;})}</Bar></BarChart></ResponsiveContainer></div></div>
+      <div><Hd t="Monthly Seasonals"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180}}><PlotlyChart data={[{x:D.sm.map(function(e){return e.n;}),y:D.sm.map(function(e){return e.v;}),type:"bar",marker:{color:D.sm.map(function(e){return e.v>0?P.gn:P.rd;})},hovertemplate:"%{x}: %{y:.1f} RR<extra></extra>"}]} layout={{margin:{t:4,r:8,b:28,l:36}}}/></div></div>
+      <div><Hd t="Day of Week"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180}}><PlotlyChart data={[{x:D.sd.map(function(e){return e.n;}),y:D.sd.map(function(e){return e.v;}),type:"bar",marker:{color:D.sd.map(function(e){return e.v>0?P.gn:P.rd;})},hovertemplate:"%{x}: %{y:.1f} RR<extra></extra>"}]} layout={{margin:{t:4,r:8,b:28,l:36}}}/></div></div>
     </div>
     <div style={{marginTop:24}}><Hd t="Asset Performance (click to drill down)"/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
@@ -311,16 +403,10 @@ function MonthDrill(props){
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:18}}>
       <div><Hd t="Equity & Daily Trades"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:200}}>
-        <ResponsiveContainer><ComposedChart data={eqData}><defs><linearGradient id="mEq" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.cy} stopOpacity={0.3}/><stop offset="95%" stopColor={P.cy} stopOpacity={0}/></linearGradient></defs>
-          <CartesianGrid strokeDasharray="3 3" stroke={P.bd}/>
-          <XAxis dataKey="d" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Day of Month",position:"insideBottom",offset:-2,fontSize:8,fill:P.td}}/>
-          <YAxis yAxisId="eq" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} domain={[700,1300]} label={{value:"Equity",angle:-90,position:"insideLeft",fontSize:8,fill:P.td}}/>
-          <YAxis yAxisId="tc" orientation="right" tick={{fontSize:8,fill:P.am}} axisLine={false} tickLine={false} label={{value:"Trades",angle:90,position:"insideRight",fontSize:8,fill:P.am}}/>
-          <Tooltip {...TT}/>
-          <ReferenceLine yAxisId="eq" y={1000} stroke={P.td} strokeDasharray="3 3"/>
-          <Bar yAxisId="tc" dataKey="tc" name="Trades" fill={P.am+"40"} radius={[2,2,0,0]}/>
-          <Area yAxisId="eq" type="monotone" dataKey="eq" name="Equity" stroke={P.cy} fill="url(#mEq)" strokeWidth={2} dot={false}/>
-        </ComposedChart></ResponsiveContainer></div></div>
+        <PlotlyChart height={220} data={[
+          {x:eqData.map(function(e){return e.d;}),y:eqData.map(function(e){return e.eq;}),name:"Equity",type:"scatter",mode:"lines",line:{color:P.cy,width:2,shape:"spline"},fill:"tozeroy",fillcolor:"rgba(0,200,200,0.08)",hovertemplate:"Day %{x}: %{y:,}<extra>Equity</extra>"},
+          {x:eqData.map(function(e){return e.d;}),y:eqData.map(function(e){return e.tc||0;}),name:"Trades",type:"bar",marker:{color:P.ac+"60"},yaxis:"y2",hovertemplate:"Day %{x}: %{y} trades<extra></extra>"}
+        ]} layout={{margin:{t:8,r:50,b:36,l:50},xaxis:{type:"category",title:{text:"Day of Month",font:{size:9}},gridcolor:P.bd},yaxis:{title:{text:"Equity",font:{size:9}},gridcolor:P.bd},yaxis2:{overlaying:"y",side:"right",showgrid:false,title:{text:"Trades",font:{size:9}}}}}/></div></div>
       <div><Hd t="Analyst Leaderboard"/>
         <div style={{background:P.cd,borderRadius:10,border:"1px solid "+P.bd,overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
@@ -432,7 +518,7 @@ function AnalystDrill(props){
     {info?<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8,marginBottom:20}}>
       <Bx l="Trades" v={fi(info.tr)}/><Bx l="Win Rate" v={fp(info.wr)} c={info.wr>=46?P.gn:P.am}/><Bx l="Sum RR" v={fm(info.sr)} c={info.sr>0?P.gn:P.rd}/><Bx l="Trig Rate" v={info.tgr>0?fp(info.tgr):"-"}/>
     </div>:null}
-    <Hd t="Monthly R/R"/><div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:200,marginBottom:16}}><ResponsiveContainer><BarChart data={mos.slice(-24)}><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="mu" tick={{fontSize:7,fill:P.td}} axisLine={false} tickLine={false} interval={2}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="rr" name="RR" radius={[3,3,0,0]}>{mos.slice(-24).map(function(e,i){return <Cell key={i} fill={e.rr>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer></div>
+    <Hd t="Monthly R/R"/><div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:200,marginBottom:16}}><PlotlyChart height={200} data={[{x:mos.slice(-24).map(function(e){return e.mu;}),y:mos.slice(-24).map(function(e){return e.rr;}),type:"bar",marker:{color:mos.slice(-24).map(function(e){return e.rr>0?P.gn:P.rd;})},hovertemplate:"%{x}: %{y:.1f} RR<extra></extra>"}]} layout={{margin:{t:8,r:12,b:40,l:40},xaxis:{tickfont:{size:7},tickangle:-45}}}/></div>
     <Hd t="Yearly Breakdown (click for months)"/>
     <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
       <Th k="y" sk={sAd.sort} tog={sAd.tog}>YEAR</Th><Th k="tn" sk={sAd.sort} tog={sAd.tog} a="right">TRADES</Th><Th k="wr2" sk={sAd.sort} tog={sAd.tog} a="right">WIN%</Th><Th k="trr" sk={sAd.sort} tog={sAd.tog} a="right">SUM RR</Th><Th k="avgdd" sk={sAd.sort} tog={sAd.tog} a="right">AVG DD</Th>
@@ -445,10 +531,10 @@ function AnalystDrill(props){
     {function(){var seas=D.as&&D.as[id];if(!seas)return null;return(<div style={{marginTop:20}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:18}}>
         <div><Hd t="Day of Week"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:160}}>
-          <ResponsiveContainer><BarChart data={seas.dow}><XAxis dataKey="n" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="Sum RR" radius={[3,3,0,0]}>{seas.dow.map(function(e,i){return <Cell key={i} fill={e.v>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer>
+          <PlotlyChart data={[{x:seas.dow.map(function(e){return e.n;}),y:seas.dow.map(function(e){return e.v;}),type:"bar",marker:{color:seas.dow.map(function(e){return e.v>0?P.gn:P.rd;})},hovertemplate:"%{x}: %{y:.1f} RR<extra></extra>"}]} layout={{margin:{t:4,r:8,b:28,l:36}}}/>
         </div></div>
         <div><Hd t="Month of Year"/><div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:160}}>
-          <ResponsiveContainer><BarChart data={seas.moy}><XAxis dataKey="n" tick={{fontSize:8,fill:P.td}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false}/><Tooltip {...TT}/><Bar dataKey="v" name="Sum RR" radius={[3,3,0,0]}>{seas.moy.map(function(e,i){return <Cell key={i} fill={e.v>0?P.gn:P.rd}/>;})}</Bar></BarChart></ResponsiveContainer>
+          <PlotlyChart data={[{x:seas.moy.map(function(e){return e.n;}),y:seas.moy.map(function(e){return e.v;}),type:"bar",marker:{color:seas.moy.map(function(e){return e.v>0?P.gn:P.rd;})},hovertemplate:"%{x}: %{y:.1f} RR<extra></extra>"}]} layout={{margin:{t:4,r:8,b:28,l:36}}}/>
         </div></div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
@@ -639,10 +725,13 @@ function Monitor(props){
       </div>);})}
     </div>:null}
     {props.flags.length>0?<div style={{background:"#FF8F1415",border:"1px solid "+P.am,borderRadius:8,padding:10,marginBottom:14}}>
-      <div style={{fontSize:11,fontWeight:600,color:P.am,marginBottom:6}}>Flagged Trades ({props.flags.length})</div>
-      {props.flags.map(function(f,i){var fStatus=f.status||"pending";return(<div key={f.id||i} style={{fontSize:10,color:P.tm,padding:"4px 0",borderBottom:"1px solid #3d3d3d20",display:"flex",alignItems:"center",gap:6}}>
-        <div style={{flex:1}}><span style={{padding:"1px 4px",borderRadius:3,fontSize:8,marginRight:4,background:fStatus==="resolved"?"#22c58330":"#FF8F1430",color:fStatus==="resolved"?P.gn:P.am}}>{fStatus}</span> <span style={{color:P.ac}}>{D.n[f.an]||f.an}</span> - {f.sym} {f.dir} {f.d?" on "+f.d:""} <span style={{color:P.am,fontSize:10}}>{f.reason}</span>{f.flagged_by?<span style={{color:P.td,fontSize:9}}> (by {f.flagged_by})</span>:null}</div>
-        {isAdmin&&fStatus==="pending"?<button onClick={function(){props.setOverModal({an:f.an,sym:f.sym,dir:f.dir,d:f.d,id:f.trade_id,origEntry:0,origExit:0,stop:0,target:0,origSt:"pending"});}} style={{padding:"3px 8px",background:P.gn+"20",border:"1px solid "+P.gn,color:P.gn,borderRadius:4,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>Amend</button>:null}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+        <div style={{fontSize:11,fontWeight:600,color:P.am}}>Flagged Trades ({props.flags.filter(function(f){return(f.status||"pending")==="pending";}).length} pending{props.flags.filter(function(f){return f.status==="resolved";}).length>0?", "+props.flags.filter(function(f){return f.status==="resolved";}).length+" resolved":""})</div>
+        {isAdmin&&props.flags.filter(function(f){return f.status==="resolved";}).length>0?<button onClick={function(){var resolved=props.flags.filter(function(f){return f.status==="resolved";});var promises=resolved.map(function(f){return fetch("/api/flags/"+f.id,{method:"DELETE"});});Promise.all(promises).then(function(){return fetch("/api/flags");}).then(function(r){return r.json();}).then(function(fl){props.setFlags(fl);});}} style={{padding:"3px 10px",background:"transparent",border:"1px solid "+P.td,color:P.td,borderRadius:4,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>Clear Resolved</button>:null}
+      </div>
+      {props.flags.filter(function(f){return(f.status||"pending")==="pending";}).map(function(f,i){return(<div key={f.id||i} style={{fontSize:10,color:P.tm,padding:"4px 0",borderBottom:"1px solid #3d3d3d20",display:"flex",alignItems:"center",gap:6}}>
+        <div style={{flex:1}}><span style={{padding:"1px 4px",borderRadius:3,fontSize:8,marginRight:4,background:"#FF8F1430",color:P.am}}>pending</span> <span style={{color:P.ac}}>{D.n[f.an]||f.an}</span> - {f.sym} {f.dir} {f.d?" on "+f.d:""} <span style={{color:P.am,fontSize:10}}>{f.reason}</span>{f.flagged_by?<span style={{color:P.td,fontSize:9}}> (by {f.flagged_by})</span>:null}</div>
+        {isAdmin?<button onClick={function(){props.setOverModal({an:f.an,sym:f.sym,dir:f.dir,d:f.d,id:f.trade_id,origEntry:0,origExit:0,stop:0,target:0,origSt:"pending"});}} style={{padding:"3px 8px",background:P.gn+"20",border:"1px solid "+P.gn,color:P.gn,borderRadius:4,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>Amend</button>:null}
         {isAdmin?<button onClick={function(){var fid=f.id;if(!fid)return;fetch("/api/flags/"+fid,{method:"DELETE"}).then(function(){return fetch("/api/flags");}).then(function(r){return r.json();}).then(function(fl){props.setFlags(fl);});}} style={{padding:"2px 6px",background:"transparent",border:"1px solid "+P.rd,color:P.rd,borderRadius:3,cursor:"pointer",fontSize:9,fontFamily:"inherit"}}>{"\u00D7"}</button>:null}
       </div>);})}
     </div>:null}
@@ -737,7 +826,7 @@ function AnalystMonitor(props){
     </div>
     <Hd t="Equity (1% risk, from 1000)"/>
     <div style={{background:P.cd,borderRadius:10,padding:14,border:"1px solid "+P.bd,height:200,marginBottom:16}}>
-      <ResponsiveContainer><AreaChart data={eq}><defs><linearGradient id={"aeq"+id} x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={P.cy} stopOpacity={0.3}/><stop offset="95%" stopColor={P.cy} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="d" tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Day",position:"insideBottom",offset:-2,fontSize:8,fill:P.td}}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} domain={[700,1300]} label={{value:"Equity",angle:-90,position:"insideLeft",fontSize:8,fill:P.td}}/><Tooltip {...TT}/><ReferenceLine y={1000} stroke={P.td} strokeDasharray="3 3"/><Area type="monotone" dataKey="eq" name="Equity" stroke={P.cy} fill={"url(#aeq"+id+")"} strokeWidth={2} dot={false}/></AreaChart></ResponsiveContainer>
+      <PlotlyChart height={180} data={[{x:eq.map(function(e){return e.d;}),y:eq.map(function(e){return e.eq;}),type:"scatter",mode:"lines",line:{color:P.cy,width:2,shape:"spline"},fill:"tozeroy",fillcolor:"rgba(0,200,200,0.08)",hovertemplate:"Day %{x}: %{y:,}<extra></extra>"}]} layout={{margin:{t:4,r:12,b:32,l:44},xaxis:{type:"category",title:{text:"Day",font:{size:9}}},yaxis:{range:[700,1300],gridcolor:P.bd},shapes:[{type:"line",y0:1000,y1:1000,x0:0,x1:1,xref:"paper",line:{color:P.td,width:1,dash:"dash"}}]}}/>
     </div>
     <Hd t="Daily Calendar"/>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(44px,1fr))",gap:4,marginBottom:16}}>
@@ -889,13 +978,13 @@ function AssetView(props){
     </div>
     <Hd t="Equity Curve (1% risk)"/>
     <div style={{background:P.cd,borderRadius:10,padding:12,border:"1px solid "+P.bd,height:180,marginBottom:18}}>
-      <ResponsiveContainer><AreaChart data={ss.eq}><defs><linearGradient id="sEq" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={ss.rr>0?P.gn:P.rd} stopOpacity={0.3}/><stop offset="95%" stopColor={ss.rr>0?P.gn:P.rd} stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke={P.bd}/><XAxis dataKey="d" tick={{fontSize:8,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Date",position:"insideBottom",offset:-2,fontSize:8,fill:P.td}}/><YAxis tick={{fontSize:9,fill:P.td}} axisLine={false} tickLine={false} label={{value:"Equity",angle:-90,position:"insideLeft",fontSize:8,fill:P.td}}/><Tooltip {...TT}/><Area type="monotone" dataKey="eq" stroke={ss.rr>0?P.gn:P.rd} fill="url(#sEq)" strokeWidth={2} dot={false}/></AreaChart></ResponsiveContainer>
+      <PlotlyChart height={200} data={[{x:(ss.eq||[]).map(function(e){return e.d;}),y:(ss.eq||[]).map(function(e){return e.eq;}),type:"scatter",mode:"lines",line:{color:ss.rr>0?P.gn:P.rd,width:2,shape:"spline"},fill:"tozeroy",fillcolor:ss.rr>0?"rgba(34,197,131,0.08)":"rgba(224,72,72,0.08)",hovertemplate:"%{x}: %{y:,}<extra></extra>"}]} layout={{margin:{t:8,r:12,b:36,l:50},xaxis:{title:{text:"Date",font:{size:9}}},yaxis:{title:{text:"Equity",font:{size:9}},gridcolor:P.bd}}}/>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
       <div><Hd t="By Analyst"/>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}><thead><tr style={{borderBottom:"1px solid "+P.bd}}>
           <th style={{padding:"6px 6px",textAlign:"left",color:P.td,fontSize:10}}>ANALYST</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>TRADES</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>WIN%</th><th style={{padding:"6px 6px",textAlign:"right",color:P.td,fontSize:10}}>RR</th>
-        </tr></thead><tbody>{(ss.ba||[]).map(function(b){return(<tr key={b.a} style={{borderBottom:"1px solid #3d3d3d15"}}>
+        </tr></thead><tbody>{(ss.ba||[]).filter(function(b){return isAdmin||b.a===USER_ANALYST_ID;}).map(function(b){return(<tr key={b.a} style={{borderBottom:"1px solid #3d3d3d15"}}>
           <td style={{padding:"5px 6px",fontWeight:600,color:isActive(b.a)?P.ac:P.td}}>{D.n[b.a]||b.a}</td>
           <td style={{padding:5,textAlign:"right"}}>{b.n}</td><td style={{padding:5,textAlign:"right",color:b.wr>=46?P.gn:P.am}}>{fp(b.wr)}</td>
           <td style={{padding:5,textAlign:"right",fontWeight:700,color:b.rr>0?P.gn:P.rd}}>{fm(b.rr)}</td>

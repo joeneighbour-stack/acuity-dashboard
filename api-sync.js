@@ -358,26 +358,62 @@ function buildDashboardData(trades, baseData) {
   const totalWins = baseOverview.wins + apiWins;
   const totalSumRR = round1(baseOverview.sumRR + apiSumRR);
 
-  // Compute equity curve, sharpe, etc from all mpnl
-  // Fixed R: each trade risks 1% of INITIAL capital (additive)
-  // Sized R: each trade risks 1% of CURRENT equity (multiplicative/compound)
+  // Compute equity curve from DAILY compounded returns
+  // 1. Sum all RR per day across all triggered trades
+  // 2. Compound daily: Fixed R uses rr*1% per day, Sized R uses rr*1% of current equity
+  allTrig.sort((a, b) => a.date.localeCompare(b.date));
+  const dailyRR = {};
+  const dailyCount = {};
+  for (const t of allTrig) {
+    const day = t.date.substring(0, 10);
+    dailyRR[day] = (dailyRR[day] || 0) + t.rr;
+    dailyCount[day] = (dailyCount[day] || 0) + 1;
+  }
+  const sortedTradeDays = Object.keys(dailyRR).sort();
+
   let eqF = 1000, eqS = 1000, peakF = 1000, peakS = 1000, maxDDF = 0, maxDDS = 0;
   const eqCurve = [];
-  const monthRets = [];
-  allMpnl.forEach(p => {
-    // Fixed R: additive (each month's ret is a percentage of initial 1000)
-    eqF = round2(eqF + p.ret * 10); // p.ret is percentage, so +1% = +10 on 1000 base
-    // Sized R: compound (each month's ret compounds on current equity)
-    eqS = round2(eqS * (1 + p.ret / 100));
+  const dailyRets = [];
+  let prevMonth = '';
+
+  for (const day of sortedTradeDays) {
+    const rr = dailyRR[day];
+    // Fixed R: each day's return = sum_rr * 1% of INITIAL capital
+    // equity += rr * 10 (1% of 1000)
+    eqF = round2(eqF + rr * 10);
+    // Sized R: each day's return = sum_rr * 1% of CURRENT equity  
+    // equity *= (1 + rr * 0.01)
+    eqS = round2(eqS * (1 + rr * 0.01));
+
     if (eqF > peakF) peakF = eqF;
     if (eqS > peakS) peakS = eqS;
     const ddF = peakF > 0 ? (peakF - eqF) / peakF * 100 : 0;
     const ddS = peakS > 0 ? (peakS - eqS) / peakS * 100 : 0;
     if (ddF > maxDDF) maxDDF = ddF;
     if (ddS > maxDDS) maxDDS = ddS;
-    monthRets.push(p.ret);
-    eqCurve.push({ d: p.m, f: Math.round(eqF), s: Math.round(eqS) });
-  });
+
+    // Record one equity point per month for the chart (to keep it manageable)
+    const month = day.substring(0, 7);
+    if (month !== prevMonth) {
+      if (prevMonth) {
+        // Push the previous month's final equity
+        eqCurve.push({ d: prevMonth, f: Math.round(eqF), s: Math.round(eqS) });
+      }
+      prevMonth = month;
+    }
+    dailyRets.push(rr);
+  }
+  // Push the last month
+  if (prevMonth) {
+    eqCurve.push({ d: prevMonth, f: Math.round(eqF), s: Math.round(eqS) });
+  }
+
+  // Also prepend base equity curve points (pre-API period)
+  const baseEq = (baseData.eq || []).filter(e => parseInt(e.d.substring(0, 4)) < apiStartYear);
+  const fullEqCurve = [...baseEq, ...eqCurve];
+
+  // Monthly returns for Sharpe calculation (from mpnl)
+  const monthRets = allMpnl.map(p => p.ret);
 
   // Win/loss streaks
   let ws = 0, ls = 0, maxWS = 0, maxLS = 0;
@@ -766,17 +802,46 @@ function buildDashboardData(trades, baseData) {
     const mt = (analystMonthMap[a] || {})[curMonth] || [];
     const trig = mt.filter(t => t.triggered);
     trig.sort((a2, b) => a2.date.localeCompare(b.date));
+    const dayRRa = {};
+    for (const t of trig) {
+      const dk = t.date.substring(0, 10);
+      dayRRa[dk] = (dayRRa[dk] || 0) + t.rr;
+    }
     let eq2 = 1000;
     const points = [{ d: 0, eq: 1000 }];
-    const dayEq = {};
-    for (const t of trig) {
-      eq2 = round2(eq2 + t.ret);
-      dayEq[t.day] = Math.round(eq2);
+    for (const dk of Object.keys(dayRRa).sort()) {
+      eq2 += dayRRa[dk] * 10;
+      points.push({ d: parseInt(dk.substring(8, 10)), eq: Math.round(eq2) });
     }
-    Object.entries(dayEq).forEach(([d, e]) => {
-      points.push({ d: parseInt(d), eq: e });
-    });
     aeq[a] = points;
+  });
+
+  // ===== ANALYST FULL EQ (for analyst-filtered overview) =====
+  const analystFullEq = {};
+  ACTIVE.forEach(a => {
+    const myTrades = allTrig.filter(t => t.an === a);
+    myTrades.sort((x, y) => x.date.localeCompare(y.date));
+    const dayRRa2 = {};
+    for (const t of myTrades) {
+      const dk = t.date.substring(0, 10);
+      dayRRa2[dk] = (dayRRa2[dk] || 0) + t.rr;
+    }
+    const sortedDays2 = Object.keys(dayRRa2).sort();
+    let af = 1000, as2 = 1000;
+    let prevM = '';
+    const pts = [];
+    for (const dk of sortedDays2) {
+      const rr = dayRRa2[dk];
+      af = round2(af + rr * 10);
+      as2 = round2(as2 * (1 + rr * 0.01));
+      const m = dk.substring(0, 7);
+      if (m !== prevM) {
+        if (prevM) pts.push({ d: prevM, f: Math.round(af), s: Math.round(as2) });
+        prevM = m;
+      }
+    }
+    if (prevM) pts.push({ d: prevM, f: Math.round(af), s: Math.round(as2) });
+    analystFullEq[a] = pts;
   });
 
   // ===== REC (Recent recommendations - last 2 days) =====
@@ -855,13 +920,31 @@ function buildDashboardData(trades, baseData) {
     const totalW = (baseSS ? baseSS.n * baseSS.wr / 100 : 0) + w;
     const totalRR = (baseSS ? baseSS.rr : 0) + rr;
 
+    // Merge ba with base per-analyst data
+    const mergedBaMap = {};
+    if (baseSS && baseSS.ba) {
+      baseSS.ba.forEach(b => { mergedBaMap[b.a] = { n: b.n, w: b.w, rr: b.rr }; });
+    }
+    ba.forEach(b => {
+      if (mergedBaMap[b.a]) {
+        mergedBaMap[b.a].n += b.n;
+        mergedBaMap[b.a].w += b.w;
+        mergedBaMap[b.a].rr = round1(mergedBaMap[b.a].rr + b.rr);
+      } else {
+        mergedBaMap[b.a] = { n: b.n, w: b.w, rr: b.rr };
+      }
+    });
+    const mergedBa = Object.entries(mergedBaMap)
+      .map(([a, d]) => ({ a, n: d.n, w: d.w, wr: round1(d.w / d.n * 100), rr: d.rr }))
+      .sort((x, y) => y.rr - x.rr);
+
     ss[sym] = {
       n: totalN,
       w: Math.round(totalW),
       wr: totalN > 0 ? round1(totalW / totalN * 100) : 0,
       rr: round1(totalRR),
       eq: baseSS ? [...(baseSS.eq || []), ...eqPoints] : eqPoints,
-      ba: ba,
+      ba: mergedBa,
       yr: baseSS ? [...(baseSS.yr || []).filter(y => !yr2.find(y2 => y2.y === y.y)), ...yr2] : yr2,
     };
   });
@@ -1055,7 +1138,7 @@ function buildDashboardData(trades, baseData) {
     n: NAMES,
     sm: sm,
     sd: sd,
-    eq: eqCurve,
+    eq: fullEqCurve,
     mpnl: allMpnl,
     am: am,
     rec: rec,
@@ -1065,6 +1148,7 @@ function buildDashboardData(trades, baseData) {
     amd: amd,
     dd: dd,
     aeq: aeq,
+    afeq: analystFullEq,
     cov: cov,
     ss: ss,
     yr: allYr,
@@ -1180,6 +1264,7 @@ async function syncData(dbOverrides) {
     lastSyncTime = new Date();
 
     console.log(`[API-SYNC] Sync complete. ${cachedData.o.trades} total trades, ${cachedData.mpnl.length} months.`);
+    console.log(`[API-SYNC] Fixed R: ${cachedData.o.fixedReturn}%, Sized R: ${cachedData.o.sizedReturn}%, Fixed DD: ${cachedData.o.fixedDD}%, Sized DD: ${cachedData.o.sizedDD}%`);
     console.log(`[API-SYNC] Latest month: ${cachedData.mpnl[cachedData.mpnl.length - 1].mu} (${cachedData.mpnl[cachedData.mpnl.length - 1].n} trades)`);
 
     return cachedData;
