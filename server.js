@@ -248,222 +248,63 @@ app.delete('/api/holidays/:id', requireAuth, async (req, res) => {
 function filterForAnalyst(D, aid) {
   const F = JSON.parse(JSON.stringify(D));
   
-  // Replace global month drill with analyst-specific data
+  // Replace month drill with analyst-specific data
   if (F.amd && F.amd[aid]) {
     const myAmd = F.amd[aid];
-    Object.keys(F.md).forEach(k => {
-      if (myAmd[k]) {
-        F.md[k] = myAmd[k];
-      } else {
-        F.md[k] = { lb: [], b5: [], w5: [], eq: [], tgr: 0 };
-      }
+    Object.keys(F.md || {}).forEach(k => {
+      if (myAmd[k]) F.md[k] = myAmd[k];
+      else if (F.md[k] && F.md[k].lb) F.md[k].lb = [];
     });
-  } else {
-    Object.keys(F.md).forEach(k => { if (F.md[k].lb) F.md[k].lb = []; });
+  } else if (F.md) {
+    Object.keys(F.md).forEach(k => { if (F.md[k] && F.md[k].lb) F.md[k].lb = []; });
   }
   delete F.amd;
 
   // Replace mpnl with analyst's own monthly data
-  let myMpnl = [];
   if (F.am && F.am[aid]) {
-    const myAm = F.am[aid];
-    myMpnl = myAm.map(m => ({
+    F.mpnl = F.am[aid].map(m => ({
       m: '20' + m.m.substring(0, 2) + '-' + m.m.substring(3, 5),
       mu: m.mu, ret: m.ret, n: m.n, w: m.w, wr: m.wr,
       dd: m.dd, rr: m.rr, tgr: m.tgr, y: '20' + m.m.substring(0, 2)
     }));
-    F.mpnl = myMpnl;
   }
 
-  // Rebuild equity curve from analyst's mpnl
-  if (myMpnl.length > 0) {
-    // Build equity curve from analyst's monthly data
-    let eqF = 1000, eqS = 1000, peakF = 1000, peakS = 1000, maxDDF = 0, maxDDS = 0;
-    F.eq = [];
-    myMpnl.forEach(p => {
-      eqF = Math.round(eqF * (1 + p.ret / 100) * 100) / 100;
-      eqS = Math.round(eqS * (1 + p.rr / 100) * 100) / 100;
-      if (eqF > peakF) peakF = eqF;
-      if (eqS > peakS) peakS = eqS;
-      const ddF = peakF > 0 ? (peakF - eqF) / peakF * 100 : 0;
-      const ddS = peakS > 0 ? (peakS - eqS) / peakS * 100 : 0;
-      if (ddF > maxDDF) maxDDF = ddF;
-      if (ddS > maxDDS) maxDDS = ddS;
-      F.eq.push({ d: p.m, f: Math.round(eqF), s: Math.round(eqS) });
-    });
-    const lastF = F.eq.length > 0 ? F.eq[F.eq.length - 1].f : 1000;
-    const lastS = F.eq.length > 0 ? F.eq[F.eq.length - 1].s : 1000;
+  // Clear mde and mdc for analyst (falls back to md.eq from amd)
+  F.mde = {};
+  F.mdc = {};
 
-    const totalN = myMpnl.reduce((s, p) => s + p.n, 0);
-    const totalW = myMpnl.reduce((s, p) => s + p.w, 0);
-    const totalRR = Math.round(myMpnl.reduce((s, p) => s + p.rr, 0) * 10) / 10;
-    F.o = {
-      trades: totalN, wins: totalW, losses: totalN - totalW,
-      winRate: totalN > 0 ? Math.round(totalW / totalN * 1000) / 10 : 0,
-      sumRR: totalRR,
-      fixedReturn: Math.round((lastF / 10 - 100) * 100) / 100,
-      sizedReturn: Math.round((lastS / 10 - 100) * 100) / 100,
-      fixedDD: Math.round(maxDDF * 100) / 100,
-      sizedDD: Math.round(maxDDS * 100) / 100,
-      from: myMpnl[0].mu, to: myMpnl[myMpnl.length - 1].mu
-    };
-
-    // Rebuild year summary
-    const yrMap = {};
-    myMpnl.forEach(p => {
-      if (!yrMap[p.y]) yrMap[p.y] = { n: 0, w: 0, rr: 0 };
-      yrMap[p.y].n += p.n; yrMap[p.y].w += p.w; yrMap[p.y].rr += p.rr;
-    });
-    F.yr = Object.entries(yrMap).sort().map(([y, d]) => ({
-      y, n: d.n, w: d.w, wr: d.n > 0 ? Math.round(d.w / d.n * 1000) / 10 : 0,
-      rr: Math.round(d.rr * 10) / 10
-    }));
-
-    // Rebuild monthly seasonals from analyst's AS data (full history) + base
-    const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    if (F.as && F.as[aid] && F.as[aid].moy) {
-      F.sm = F.as[aid].moy.map(m => ({ n: m.n, v: m.v }));
-    } else {
-      F.sm = MN.map(n => ({ n, v: 0 }));
-      myMpnl.forEach(p => {
-        const mi = parseInt(p.m.slice(5)) - 1;
-        if (mi >= 0 && mi < 12) F.sm[mi].v = Math.round((F.sm[mi].v + p.rr) * 10) / 10;
-      });
-    }
-  }
-
-  // Use AS (analyst seasonals) for day-of-week (full trade history, not just last 30 days)
-  if (F.as && F.as[aid] && F.as[aid].dow) {
-    F.sd = F.as[aid].dow.map(d => ({ n: d.n, v: d.v }));
-  } else if (F.dd) {
-    // Fallback: rebuild from dd (last 30 days only)
-    F.sd = [{ n: 'Mon', v: 0 }, { n: 'Tue', v: 0 }, { n: 'Wed', v: 0 }, { n: 'Thu', v: 0 }, { n: 'Fri', v: 0 }];
-    Object.entries(F.dd).forEach(([dateStr, dayData]) => {
-      if (dayData.t) {
-        const dow = new Date(dateStr + 'T12:00:00Z').getUTCDay();
-        dayData.t.forEach(t => {
-          if (t.an === aid && t.st === 'live' && dow >= 1 && dow <= 5) {
-            F.sd[dow - 1].v = Math.round((F.sd[dow - 1].v + t.rr) * 10) / 10;
-          }
-        });
-      }
-    });
-  }
-
-  // Filter DD (day drill) to only this analyst's trades
+  // Filter DD to analyst's trades only
   if (F.dd) {
     Object.keys(F.dd).forEach(k => {
-      const dayData = F.dd[k];
-      if (dayData.t) {
-        dayData.t = dayData.t.filter(t => t.an === aid);
-        // Recalculate ba for this analyst only
-        const live = dayData.t.filter(t => t.st === 'live');
-        dayData.ba = {};
-        if (live.length > 0) {
-          dayData.ba[aid] = {
-            n: live.length,
-            w: live.filter(t => t.rr > 0).length,
-            rr: Math.round(live.reduce((s, t) => s + t.rr, 0) * 100) / 100
-          };
-        }
-        dayData.nl = live.length;
-        dayData.np = dayData.t.length - live.length;
+      if (F.dd[k] && F.dd[k].t) {
+        F.dd[k].t = F.dd[k].t.filter(t => t.an === aid);
       }
     });
   }
 
-  // Filter DP (daily performance) to analyst's trades
-  if (F.dp) {
-    // Rebuild dp from filtered dd
+  // Filter DP to analyst's trades
+  if (F.dp && F.dd) {
     F.dp = F.dp.map(day => {
       const ddDay = F.dd[day.d];
-      if (!ddDay) return day;
-      const live = (ddDay.t || []).filter(t => t.st === 'live');
+      if (!ddDay || !ddDay.t) return day;
+      const live = ddDay.t.filter(t => t.st === 'live');
       return {
-        d: day.d,
-        n: live.length,
+        d: day.d, n: live.length,
         w: live.filter(t => t.rr > 0).length,
         rr: Math.round(live.reduce((s, t) => s + t.rr, 0) * 100) / 100,
         tgr: ddDay.t.length > 0 ? Math.round(live.length / ddDay.t.length * 1000) / 10 : 0,
-        nl: live.length,
-        np: ddDay.t.length - live.length
+        nl: live.length, np: ddDay.t.length - live.length
       };
     });
   }
 
-  // Clear global mde and mdc so MonthDrill falls back to analyst-specific md.eq from amd
-  F.mde = {};
-  F.mdc = {};
-
-  // Rebuild SR (asset rankings) from analyst's trades in dd
-  if (F.dd) {
-    const symRRAll = {};
-    const symRRByYr = {};
-    Object.entries(F.dd).forEach(([dateStr, dayData]) => {
-      const yr = dateStr.substring(0, 4);
-      (dayData.t || []).forEach(t => {
-        if (t.st === 'live') {
-          if (!symRRAll[t.sym]) symRRAll[t.sym] = { n: 0, w: 0, rr: 0 };
-          symRRAll[t.sym].n++; if (t.rr > 0) symRRAll[t.sym].w++;
-          symRRAll[t.sym].rr = Math.round((symRRAll[t.sym].rr + t.rr) * 10) / 10;
-          if (!symRRByYr[yr]) symRRByYr[yr] = {};
-          if (!symRRByYr[yr][t.sym]) symRRByYr[yr][t.sym] = { n: 0, w: 0, rr: 0 };
-          symRRByYr[yr][t.sym].n++; if (t.rr > 0) symRRByYr[yr][t.sym].w++;
-          symRRByYr[yr][t.sym].rr = Math.round((symRRByYr[yr][t.sym].rr + t.rr) * 10) / 10;
-        }
-      });
-    });
-    // Also add from mpnl-era ss data if available (pre-API base has ss per symbol)
-    // For now, sr from dd covers the last 30 days only, which is limited
-    // Better: rebuild from analyst's rec data which has more history
-  }
-
-  // Rebuild SR from rec (recent trades - last 30 days per analyst)
-  if (F.rec && F.rec[aid]) {
-    const symRRAnal = {};
-    F.rec[aid].forEach(t => {
-      if (t.st === 'live' || t.rr !== 0) {
-        if (!symRRAnal[t.sym]) symRRAnal[t.sym] = { n: 0, w: 0, rr: 0 };
-        symRRAnal[t.sym].n++; if (t.rr > 0) symRRAnal[t.sym].w++;
-        symRRAnal[t.sym].rr = Math.round((symRRAnal[t.sym].rr + t.rr) * 10) / 10;
-      }
-    });
-    // Use ss (symbol stats) which is already built per-analyst in api-sync but not filtered here
-    // Actually ss is global - we need to keep it as-is for Asset Drill which uses D.ss
-    // For the rankings we'll use what we can from the mpnl period
-  }
-
-  // Best approach: use the analyst's AM data to rebuild all-time sr
-  // The AM doesn't have per-symbol data but the ss (setup stats) does per-analyst breakdowns
-  // For now, filter the global sr to only include symbols the analyst has traded
-  // This at least shows their personal RR per symbol
-  if (F.ss) {
-    // ss has per-analyst breakdown in .ba array
-    const mySymRR = {};
-    Object.entries(F.ss).forEach(([sym, data]) => {
-      if (data.ba) {
-        const myBA = data.ba.find(b => b.a === aid);
-        if (myBA && myBA.n > 0) {
-          mySymRR[sym] = { s: sym, c: data.cat || '', n: myBA.n, w: myBA.w, wr: Math.round(myBA.w / myBA.n * 1000) / 10, rr: myBA.rr };
-        }
-      }
-    });
-    const mySorted = Object.values(mySymRR).sort((a, b) => b.rr - a.rr);
-    F.sr = { all: mySorted };
-    // Add year breakdowns from yr
-    if (F.yr) {
-      F.yr.forEach(y => { F.sr[y.y] = mySorted; }); // same data for now
-    }
-  }
-
+  // Filter per-analyst data
   if (F.am) { const my = F.am[aid] || []; F.am = {}; F.am[aid] = my; }
   if (F.aeq) { const my = F.aeq[aid] || []; F.aeq = {}; F.aeq[aid] = my; }
   if (F.rec) { const my = F.rec[aid] || []; F.rec = {}; F.rec[aid] = my; }
   if (F.kh) { const my = F.kh[aid] || []; F.kh = {}; F.kh[aid] = my; }
   if (F.as) { const my = F.as[aid] || {}; F.as = {}; F.as[aid] = my; }
   if (F.atgr) { const my = F.atgr[aid] || 0; F.atgr = {}; F.atgr[aid] = my; }
-  // Keep cov (coverage) unfiltered - Schedule needs all analysts' markets
-  // if (F.cov) - deliberately NOT filtering
   if (F.a) F.a = F.a.filter(a => a.id === aid);
   F._role = 'analyst';
   F._analyst_id = aid;
